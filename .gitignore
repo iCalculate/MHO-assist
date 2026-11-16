@@ -5,6 +5,8 @@ __pycache__/
 
 /build/
 /dist/
+/qtscrcpy/output/
+/qtscrcpy/QtScrcpy/QtScrcpyCore/src/third_party/
 /release/
 /release_v[0-9]*/
 /phone_pointer/

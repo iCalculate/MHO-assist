@@ -63,4 +63,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:2] == ['--keymap-editor']:
+        from integrations.qtscrcpy.keymap_editor import main as keymap_editor
+        keymap_editor(sys.argv[2:])
+    else:
+        main()

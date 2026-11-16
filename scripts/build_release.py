@@ -23,15 +23,13 @@ RUNTIME_SOURCES = {
 }
 
 
-def copy_notices(bundle):
-    from PySide6.QtCore import qVersion
-
-    notices = bundle / 'licenses'
-    notices.mkdir()
+def copy_python_notices(notices, packages):
+    notices.mkdir(parents=True, exist_ok=True)
     python_version = sys.version.split()[0]
     manifest = [f'Python {python_version}\nhttps://www.python.org/downloads/source/']
     shutil.copy2(Path(sys.base_prefix) / 'LICENSE.txt', notices / 'Python-LICENSE.txt')
-    for package, url in RUNTIME_SOURCES.items():
+    for package in packages:
+        url = RUNTIME_SOURCES[package]
         distribution = metadata.distribution(package)
         manifest.append(f'{package} {distribution.version}\n{url}')
         for entry in distribution.files:
@@ -43,6 +41,14 @@ def copy_notices(bundle):
                 destination = notices / package / entry
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
+    return manifest
+
+
+def copy_notices(bundle):
+    from PySide6.QtCore import qVersion
+
+    notices = bundle / 'licenses'
+    manifest = copy_python_notices(notices, RUNTIME_SOURCES)
     shutil.copytree(PROJECT / 'scripts/freeze/licenses', notices / 'Qt')
     qt_version = qVersion()
     qt_series = '.'.join(qt_version.split('.')[:2])
