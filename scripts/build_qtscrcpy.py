@@ -174,7 +174,7 @@ def verify_ffmpeg(app):
             raise RuntimeError('The bundled FFmpeg is missing MP4 recording support')
 
 
-def verify(archive, folder):
+def verify(archive, folder, qt):
     import cv2
     import numpy as np
 
@@ -205,6 +205,7 @@ def verify(archive, folder):
     frame = cv2.imdecode(np.frombuffer(sample, np.uint8), cv2.IMREAD_COLOR)
     fixture = folder / 'arrow-frame.yuv'
     fixture.write_bytes(cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420).tobytes())
+    shutil.copy2(qt / 'bin/Qt5Test.dll', app / 'Qt5Test.dll')
     for name in ('input_reset_test', 'panel_layout_test', 'integrated_assist_test'):
         test = app / f'{name}.exe'
         shutil.copy2(BUILD / test.name, test)
@@ -245,7 +246,7 @@ def main():
         stage_files(app, args.runtime.resolve(), args.qt.resolve(), args.pointer_apk.resolve(), args.version)
         stem = f'{APP_NAME}-{args.version}-windows-x64'
         archive = Path(shutil.make_archive(str(folder / stem), 'zip', folder, APP_NAME))
-        verify(archive, folder / 'extract check')
+        verify(archive, folder / 'extract check', args.qt.resolve())
         with archive.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         published = OUTPUT / archive.name
