@@ -78,7 +78,7 @@ def compile_programs(qt, ffmpeg):
     )
 
 
-def stage_files(app, runtime, pointer, version):
+def stage_files(app, runtime, qt, pointer, version):
     app.mkdir()
     for item in NATIVE_FILES:
         shutil.copy2(NATIVE / item, app / item)
@@ -88,6 +88,7 @@ def stage_files(app, runtime, pointer, version):
         (app / folder).mkdir()
         for plugin in sorted((runtime / folder).glob('*.dll')):
             shutil.copy2(plugin, app / folder / plugin.name)
+    shutil.copy2(qt / 'plugins/platforms/qoffscreen.dll', app / 'platforms/qoffscreen.dll')
     (app / 'qt.conf').write_text('[Paths]\nPlugins=.\n', encoding='ascii')
     shutil.copy2(pointer, app / 'qtscrcpy-pointer.apk')
     shutil.copytree(SOURCE / 'config', app / 'config', ignore=shutil.ignore_patterns('userdata.ini'))
@@ -241,7 +242,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='mho-qtscrcpy-', dir=OUTPUT) as temporary:
         folder = Path(temporary)
         app = folder / APP_NAME
-        stage_files(app, args.runtime.resolve(), args.pointer_apk.resolve(), args.version)
+        stage_files(app, args.runtime.resolve(), args.qt.resolve(), args.pointer_apk.resolve(), args.version)
         stem = f'{APP_NAME}-{args.version}-windows-x64'
         archive = Path(shutil.make_archive(str(folder / stem), 'zip', folder, APP_NAME))
         verify(archive, folder / 'extract check')
