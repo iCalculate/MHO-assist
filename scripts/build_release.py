@@ -58,6 +58,15 @@ def copy_notices(bundle):
     (notices / 'README.txt').write_text('\n\n'.join(manifest) + '\n', encoding='utf-8')
 
 
+def system_environment():
+    environment = os.environ.copy()
+    for variable in ('PYTHONHOME', 'PYTHONPATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH'):
+        environment.pop(variable, None)
+    windows = Path(os.environ['SystemRoot'])
+    environment['PATH'] = os.pathsep.join([str(windows / 'System32'), str(windows)])
+    return environment
+
+
 def verify_archive(archive, folder):
     with ZipFile(archive) as zipped:
         invalid = zipped.testzip()
@@ -66,11 +75,7 @@ def verify_archive(archive, folder):
         zipped.extractall(folder)
 
     app_dir = folder / 'MHO-Assist'
-    environment = os.environ.copy()
-    for variable in ('PYTHONHOME', 'PYTHONPATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH'):
-        environment.pop(variable, None)
-    windows = Path(os.environ['SystemRoot'])
-    environment['PATH'] = os.pathsep.join([str(windows / 'System32'), str(windows)])
+    environment = system_environment()
     environment['QT_QPA_PLATFORM'] = 'offscreen'
     subprocess.run(
         [str(app_dir / 'ArrowAssist.exe'), '--smoke-test'],
@@ -85,7 +90,9 @@ def build(version, output):
     stem = f'MHO-Assist-{version}-windows-x64'
     with tempfile.TemporaryDirectory(prefix='mho-build-', dir=output) as work:
         staging = Path(work)
-        environment = {**os.environ, 'PYINSTALLER_CONFIG_DIR': str(staging / 'cache')}
+        # Avoid collecting incompatible DLLs from unrelated installations on PATH.
+        environment = system_environment()
+        environment['PYINSTALLER_CONFIG_DIR'] = str(staging / 'cache')
         frozen = staging / 'frozen'
         subprocess.run(
             [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--log-level', 'WARN',
