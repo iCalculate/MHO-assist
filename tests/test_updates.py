@@ -4,14 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch,MagicMock
 import numpy as np
-from detector import RoundGate,Reading
-from preferences import Preferences
-import windows_io as win
-# Import configures the matching PySide6 plugins before constructing a GUI.
-import assist
-from worker import Worker
-from selection import SelectionOverlay
-from PySide6 import QtCore,QtGui,QtWidgets,QtTest
+from mho_assist.detector import RoundGate,Reading
+from mho_assist.preferences import Preferences
+from mho_assist import windows_io as win
+from mho_assist.worker import Worker
+from mho_assist.selection import SelectionOverlay
+from PySide6 import QtCore,QtGui,QtTest
+from qt_support import application
 
 class UpdatedGateTests(unittest.TestCase):
     def test_preview_does_not_consume_current_round_on_arm(self):
@@ -52,6 +51,7 @@ class JitterTests(unittest.TestCase):
 
 class WorkerTests(unittest.TestCase):
     def run_worker(self,cached=False):
+        application()
         prefs=MagicMock();prefs.restore.return_value=(280,377,495,54) if cached else None
         w=Worker(1,None,30,30,.72,preferences=prefs,cache_key='game');calls=[0]
         # This test isolates preview/commit behavior, not the separately tested
@@ -64,7 +64,7 @@ class WorkerTests(unittest.TestCase):
             if calls[0]==7:w.running=False
             return reading
         capture=MagicMock();capture.__enter__.return_value=capture;capture.grab.return_value=np.zeros((54,495,4),np.uint8)
-        with patch('worker.mss.mss',return_value=capture),patch('worker.Detector') as detector,patch('worker.Locator') as locator,patch('worker.win.is_target',return_value=True),patch('worker.win.foreground',return_value=True),patch('worker.win.client_rect',return_value=(0,0,1080,484)),patch('worker.win.send_sequence',return_value=3) as send,patch('worker.time.sleep'):
+        with patch('mho_assist.worker.mss.mss',return_value=capture),patch('mho_assist.worker.Detector') as detector,patch('mho_assist.worker.Locator') as locator,patch('mho_assist.worker.win.is_target',return_value=True),patch('mho_assist.worker.win.foreground',return_value=True),patch('mho_assist.worker.win.client_rect',return_value=(0,0,1080,484)),patch('mho_assist.worker.win.send_sequence',return_value=3) as send,patch('mho_assist.worker.time.sleep'):
             detector.return_value.read.side_effect=read;locator.return_value.locate.return_value=(280,377,495,54)
             w.run()
             self.assertEqual(send.call_count,1)
@@ -78,7 +78,7 @@ class WorkerTests(unittest.TestCase):
 
 class SelectionTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):cls.app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    def setUpClass(cls):cls.app=application()
     def test_drag_shows_band_and_returns_physical_coordinates(self):
         screen=self.app.primaryScreen();image=QtGui.QPixmap(800,600);image.fill(QtGui.QColor('#29384a'))
         overlay=SelectionOverlay(screen,image,(-1000,0,1000,750));overlay.resize(800,600);overlay.show();self.app.processEvents()

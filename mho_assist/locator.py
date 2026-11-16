@@ -1,14 +1,13 @@
 """Locate the game's four-button diamond anywhere inside an image."""
-from pathlib import Path
 import cv2
 import numpy as np
+from mho_assist.resources import load_template
 
-BASE=Path(__file__).resolve().parent
 CENTERS={'up':(900,283),'left':(836,347),'down':(900,410),'right':(965,347)}
 
 class Locator:
     def __init__(self):
-        self.templates={k:cv2.imread(str(BASE/'templates'/f'control_{k}.png'),0) for k in CENTERS}
+        self.templates={k:load_template(f'control_{k}.png') for k in CENTERS}
 
     def locate(self,image):
         factor=min(1.,1000/image.shape[1])

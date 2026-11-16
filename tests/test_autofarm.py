@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 import numpy as np
 import cv2
-from autofarm import AutoFarm,Page,PageDetector,MatchProgress,COMMANDS,page_delta
-import windows_io as win
+from mho_assist.autofarm import AutoFarm,Page,PageDetector,MatchProgress,COMMANDS,page_delta
+from mho_assist import windows_io as win
 
 def page(color=0,world=False,result=False,dance=False):return Page(world,result,dance,np.full((484,1080,3),color,np.uint8))
 

@@ -1,10 +1,9 @@
 """Fixed-layout detector for the supplied 1080 x 484 game recording."""
 from dataclasses import dataclass
-from pathlib import Path
 import cv2
 import numpy as np
+from mho_assist.resources import load_template
 
-BASE = Path(__file__).resolve().parent
 ROI = (280, 377, 775, 431)
 LABELS = ('down', 'left', 'up', 'right')
 SYMBOLS = dict(up='↑', down='↓', left='←', right='→')
@@ -21,9 +20,7 @@ class Reading:
 class Detector:
     def __init__(self, threshold=.72):
         self.threshold = threshold
-        self.templates = [cv2.imread(str(BASE/'templates'/f'{k}.png'), 0) for k in LABELS]
-        if any(t is None for t in self.templates):
-            raise RuntimeError('Missing templates; run prepare_templates.py')
+        self.templates = [load_template(f'{k}.png') for k in LABELS]
 
     def read(self, row):
         """Read a nominal 495x54 strip, optionally with symmetric guard pixels.

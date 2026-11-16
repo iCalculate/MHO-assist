@@ -1,12 +1,18 @@
+import argparse
 from pathlib import Path
 import subprocess
 import zipfile
 
+parser=argparse.ArgumentParser(description='Build the optional Android pointer service.')
+parser.add_argument('--android-jar',type=Path,required=True)
+parser.add_argument('--build-tools',type=Path,required=True)
+parser.add_argument('--jdk-bin',type=Path,required=True)
+args=parser.parse_args()
+
 root=Path(__file__).resolve().parent
 out=root/'build';out.mkdir(exist_ok=True)
-sdk=root.parent/'analysis/integrated_hud_20261112/android-sdk'
-tools=sdk/'android-15';platform=sdk/'android-35/android.jar'
-jdk=Path('C:/Program Files/JetBrains/PyCharm 2026.1/jbr/bin')
+tools=args.build_tools.resolve();platform=args.android_jar.resolve()
+jdk=args.jdk_bin.resolve()
 def run(args):subprocess.run([str(a) for a in args],check=True)
 classes=out/'classes';classes.mkdir(exist_ok=True)
 run([jdk/'javac.exe','-encoding','UTF-8','-source','8','-target','8','-bootclasspath',platform,'-d',classes,root/'PointerService.java'])

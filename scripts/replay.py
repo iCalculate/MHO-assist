@@ -3,9 +3,9 @@ import argparse,json,time
 from pathlib import Path
 import cv2
 import numpy as np
-from detector import Detector,RoundGate,video_row,SYMBOLS
-from locator import Locator
-from tracking import RegionConfirmation,guarded_rect
+from mho_assist.detector import Detector,RoundGate,video_row,SYMBOLS
+from mho_assist.locator import Locator
+from mho_assist.tracking import RegionConfirmation,guarded_rect
 
 def run(video,output,step=2,auto=False):
     cap=cv2.VideoCapture(str(video));fps=cap.get(cv2.CAP_PROP_FPS)
@@ -33,8 +33,10 @@ def run(video,output,step=2,auto=False):
                 automatic_location=located if auto else None,
                 recognition_ms_median=round(float(np.median(latencies)),2),recognition_ms_p95=round(float(np.percentile(latencies,95)),2),
                 note='Offline detections, not independently labelled accuracy or phone delivery measurements.')
-    Path(output).write_text(json.dumps(result,ensure_ascii=False,indent=2,default=int),encoding='utf-8')
-    if tiles:cv2.imwrite(str(Path(output).with_suffix('.jpg')),cv2.vconcat(tiles))
+    output_path=Path(output)
+    output_path.parent.mkdir(parents=True,exist_ok=True)
+    output_path.write_text(json.dumps(result,ensure_ascii=False,indent=2,default=int),encoding='utf-8')
+    if tiles:cv2.imwrite(str(output_path.with_suffix('.jpg')),cv2.vconcat(tiles))
     print(json.dumps(result,ensure_ascii=True,indent=2))
 
 if __name__=='__main__':

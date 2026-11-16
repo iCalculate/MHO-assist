@@ -2,10 +2,10 @@
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import assist
+from mho_assist import app as assist
 from PySide6 import QtCore,QtWidgets
 from unittest.mock import patch
-import windows_io as win
+from mho_assist import windows_io as win
 
 events=[]
 class Receiver(QtWidgets.QWidget):

@@ -1,6 +1,6 @@
 """Visible per-monitor rubber bands, with logical-to-physical coordinate mapping."""
 from PySide6 import QtCore,QtGui,QtWidgets
-import windows_io as win
+from mho_assist import windows_io as win
 
 class SelectionOverlay(QtWidgets.QDialog):
     selected=QtCore.Signal(tuple)

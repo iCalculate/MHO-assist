@@ -2,10 +2,10 @@ import ctypes
 import unittest
 from unittest.mock import patch
 import cv2
-from detector import Detector,Reading,RoundGate,video_row,yellow_feedback
-from locator import Locator
+from mho_assist.detector import Detector,Reading,RoundGate,video_row,yellow_feedback
+from mho_assist.locator import Locator
 import numpy as np
-import windows_io as win
+from mho_assist import windows_io as win
 
 class GateTests(unittest.TestCase):
     def test_stability_feedback_and_identical_next_round(self):

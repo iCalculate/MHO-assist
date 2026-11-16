@@ -4,13 +4,12 @@ No screen capture or input side effects here: the worker supplies frames and
 executes one command at a time. Shift is a standalone tap, never held with [.
 """
 from dataclasses import dataclass
-from pathlib import Path
 import cv2
 import numpy as np
+from mho_assist.resources import load_template
 
 COMMANDS=('shift','bracket_left','bracket_right','bracket_right')
 NAMES=('Shift','[',']',']')
-BASE=Path(__file__).resolve().parent
 
 def canonical(frame,region=None):
     if region:
@@ -28,8 +27,8 @@ class Page:
 
 class PageDetector:
     def __init__(self):
-        self.templates={k:cv2.imread(str(BASE/'templates/cycle'/f'{k}.png'),0) for k in ['result_win','result_loss','world_match']}
-        self.controls={k:cv2.imread(str(BASE/'templates'/f'control_{k}.png'),0) for k in ['up','down','left','right']}
+        self.templates={k:load_template(f'cycle/{k}.png') for k in ['result_win','result_loss','world_match']}
+        self.controls={k:load_template(f'control_{k}.png') for k in ['up','down','left','right']}
     def read(self,frame,region=None):
         f=canonical(frame,region);gray=cv2.cvtColor(f,cv2.COLOR_BGR2GRAY)
         def score(name,box):

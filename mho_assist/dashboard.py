@@ -1,7 +1,7 @@
 """Lightweight Qt-painted charts. No plotting process in the capture loop."""
 import math
 from PySide6 import QtCore,QtGui,QtWidgets
-from language import tr
+from mho_assist.language import tr
 
 COLORS={'up':'#e8bf68','down':'#c39af3','left':'#69d7ad','right':'#79b4fa'}
 SYMBOLS={'up':'↑','down':'↓','left':'←','right':'→'}

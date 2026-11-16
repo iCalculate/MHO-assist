@@ -1,33 +1,34 @@
 # -*- coding: utf-8 -*-
-import os
 import sys
 import time
 from pathlib import Path
 from PySide6 import QtCore,QtGui,QtWidgets
-from worker import Worker
-from preferences import Preferences
-from selection import ScreenSelector
-from history_store import HistoryStore
-from dashboard import Dashboard
-from language import tr,reason
-from game_bridge import GameBridge
-from cycle_widgets import RepeatSwitch,PhaseSteps
-from autofarm import NAMES
-import windows_io as win
+from mho_assist.worker import Worker
+from mho_assist.preferences import Preferences
+from mho_assist.selection import ScreenSelector
+from mho_assist.history_store import HistoryStore
+from mho_assist.dashboard import Dashboard
+from mho_assist.language import tr,reason
+from mho_assist.game_bridge import GameBridge
+from mho_assist.cycle_widgets import RepeatSwitch,PhaseSteps
+from mho_assist.autofarm import NAMES
+from mho_assist import windows_io as win
 
-ROOT=Path(__file__).resolve().parent
-APP_DIR=Path(sys.executable).parent if getattr(sys,'frozen',False) else ROOT
+PROJECT_DIR=Path(__file__).resolve().parents[1]
+APP_DIR=Path(sys.executable).resolve().parent if getattr(sys,'frozen',False) else PROJECT_DIR
 
 def data_directory():
-    if getattr(sys,'frozen',False) and APP_DIR.parent.name.startswith('release'):
+    if getattr(sys,'frozen',False) and APP_DIR.name=='ArrowAssist' and APP_DIR.parent.name.startswith('release'):
         return APP_DIR.parent.parent/'data'
-    return (APP_DIR if getattr(sys,'frozen',False) else ROOT)/'data'
+    return APP_DIR/'data'
 
 class Main(QtWidgets.QWidget):
     def __init__(self,data_dir=None,smoke=False,language=None):
         super().__init__();self.resize(800,650);self.smoke=smoke;self.worker=None;self.screen_range=None;self.range_hwnd=None
-        self.preferences=Preferences(APP_DIR/'settings.json');self.lang=language or self.preferences.data.get('language','zh')
-        self.store=HistoryStore(data_dir or data_directory(),self.lang);self.bridge=GameBridge()
+        settings_dir=Path(data_dir) if smoke and data_dir is not None else APP_DIR
+        self.preferences=Preferences(settings_dir/'settings.json');self.lang=language or self.preferences.data.get('language','zh')
+        self.store=HistoryStore(data_dir or data_directory(),self.lang)
+        self.bridge=GameBridge(self.preferences.data.get('qtscrcpy_executable'))
         self.last_preview='';self.notice_text='';self.notice_until=0;self.bridge_until=0;self._closed=False;self._dirty=True;self._widgets=[]
         self._cycle_state={'phase':0,'counts':[0,0,0],'state':'playing','step':0,'games':0,'error':''}
         values=self.preferences.data.get('options',{})
@@ -40,7 +41,7 @@ class Main(QtWidgets.QWidget):
         bar.addWidget(self.button('refresh',self.refresh));bar.addWidget(self.button('select',self.select))
         self.tools=QtWidgets.QToolButton();self.tools.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup);self.tools.clicked.connect(self.connect_mirror)
         menu=QtWidgets.QMenu(self.tools);self.tool_actions=[]
-        for key,action in [('qt_open',self.connect_mirror),('game_focus',self.focus_game),('recover',lambda:self.launch_tool('recover')),('editor',lambda:self.launch_tool('editor')),('touches',lambda:self.launch_tool('touches')),('folder',self.open_tools_folder)]:
+        for key,action in [('qt_open',self.connect_mirror),('qt_configure',self.configure_mirror),('game_focus',self.focus_game),('recover',lambda:self.launch_tool('recover')),('editor',lambda:self.launch_tool('editor')),('touches',lambda:self.launch_tool('touches')),('folder',self.open_tools_folder)]:
             item=menu.addAction('');item.triggered.connect(action);self.tool_actions.append((item,key))
         self.tools.setMenu(menu);bar.addWidget(self.tools);layout.addLayout(bar)
         actions=QtWidgets.QHBoxLayout()
@@ -220,11 +221,28 @@ class Main(QtWidgets.QWidget):
         if key in ('recover','touches'):self.stop()
         try:self.bridge.open_tool(key);self.store.write_log(dict(kind='tool',tool=key))
         except OSError as exc:self.notice(tr('tool_error',self.lang,path=str(exc)))
+    def configure_mirror(self):
+        start_path=self.bridge.mirror_executable or self.bridge.root
+        filename,_=QtWidgets.QFileDialog.getOpenFileName(
+            self,tr('qt_configure',self.lang),str(start_path),'QtScrcpy (QtScrcpy.exe)')
+        if not filename:
+            return
+        executable=Path(filename).resolve()
+        if executable.name.lower()!='qtscrcpy.exe' or not executable.is_file():
+            self.notice(tr('qt_invalid',self.lang))
+            return
+        self.bridge.mirror_executable=executable
+        self.preferences.data['qtscrcpy_executable']=str(executable)
+        if not self.smoke:
+            self.preferences.save()
+        self.retranslate()
+        self.notice(tr('qt_configured',self.lang))
+
     def connect_mirror(self):
         self.bridge_until=time.monotonic()+60
         if self.bind_mirror():return
         try:self.bridge.open_tool('mirror');self.notice(tr('waiting_phone',self.lang))
-        except OSError as exc:self.notice(tr('tool_error',self.lang,path=str(exc)))
+        except OSError:self.bridge_until=0;self.notice(tr('qt_missing',self.lang))
     def bind_mirror(self):
         mirrors=self.bridge.mirrors()
         if len(mirrors)!=1:

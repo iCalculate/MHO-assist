@@ -10,9 +10,9 @@ import time
 
 import cv2
 import numpy as np
-from detector import Detector, RoundGate
-from locator import Locator
-from tracking import RegionConfirmation
+from mho_assist.detector import Detector, RoundGate
+from mho_assist.locator import Locator
+from mho_assist.tracking import RegionConfirmation
 
 
 class Recognizer:

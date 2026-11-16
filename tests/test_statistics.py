@@ -3,12 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch,MagicMock
-from history_store import HistoryStore,TimingBatch
-from language import TEXT,tr,reason
-import assist
-import app_window
-from PySide6 import QtWidgets,QtCore
-from game_bridge import GameBridge
+from mho_assist.history_store import HistoryStore,TimingBatch
+from mho_assist.language import TEXT,tr,reason
+from mho_assist import app_window
+from mho_assist.game_bridge import GameBridge
+from qt_support import application
 
 class HistoryTests(unittest.TestCase):
     def event(self,store,key,seq,confidence=.9):
@@ -71,7 +70,7 @@ class HistoryTests(unittest.TestCase):
 
 class DashboardTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):cls.app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    def setUpClass(cls):cls.app=application()
     def test_language_switch_keeps_session_data_and_english_labels(self):
         with tempfile.TemporaryDirectory() as folder:
             ui=app_window.Main(data_dir=folder,smoke=True,language='zh')
@@ -86,6 +85,10 @@ class DashboardTests(unittest.TestCase):
     def test_data_directory_is_shared_across_packaged_releases(self):
         with patch.object(app_window,'APP_DIR',Path('D:/Game/MH_assist/release_v4/ArrowAssist')),patch.object(app_window.sys,'frozen',True,create=True):
             self.assertEqual(app_window.data_directory(),Path('D:/Game/MH_assist/data'))
+    def test_portable_data_directory_stays_next_to_executable(self):
+        folder=Path('D:/Downloads/release-files/MHO-Assist')
+        with patch.object(app_window,'APP_DIR',folder),patch.object(app_window.sys,'frozen',True,create=True):
+            self.assertEqual(app_window.data_directory(),folder/'data')
     def test_repeat_switch_updates_runtime_flag_and_does_not_arm_input(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as folder:
@@ -102,12 +105,25 @@ class DashboardTests(unittest.TestCase):
     def test_tool_launcher_uses_existing_grouped_shortcut(self):
         with tempfile.TemporaryDirectory() as folder:
             bridge=GameBridge();bridge.folder=Path(folder);(bridge.folder/'游戏按键位置编辑器.lnk').touch()
-            with patch('game_bridge.QtGui.QDesktopServices.openUrl',return_value=True) as opened:
+            with patch('mho_assist.game_bridge.QtGui.QDesktopServices.openUrl',return_value=True) as opened:
                 bridge.open_tool('editor');self.assertIn('游戏按键位置编辑器.lnk',opened.call_args[0][0].toLocalFile())
             bridge.root=Path(folder)/'installed'
             archived=bridge.root/'tool-shortcuts'/'QtScrcpy 输入修复版.lnk'
             archived.parent.mkdir(parents=True);archived.touch()
-            with patch('game_bridge.QtGui.QDesktopServices.openUrl',return_value=True) as opened:
+            with patch('mho_assist.game_bridge.QtGui.QDesktopServices.openUrl',return_value=True) as opened:
                 bridge.open_tool('mirror');self.assertEqual(str(archived).replace('\\','/'),opened.call_args[0][0].toLocalFile())
+
+    def test_configured_qtscrcpy_uses_its_own_working_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            qt_directory=Path(folder)/'QtScrcpy 便携版'
+            keymap=qt_directory/'keymap'
+            keymap.mkdir(parents=True)
+            (keymap/'MHO-Dance.json').write_text('{"switchKey": "Key_Control"}',encoding='utf-8')
+            executable=qt_directory/'QtScrcpy.exe'
+            bridge=GameBridge(executable)
+            self.assertEqual(bridge.mapping_key(),'Ctrl')
+            with patch('mho_assist.game_bridge.subprocess.Popen') as run:
+                bridge.open_tool('mirror')
+            run.assert_called_once_with([str(executable)],cwd=qt_directory)
 
 if __name__=='__main__':unittest.main()

@@ -1,7 +1,7 @@
 import base64
 import unittest
 import cv2
-from integrated_direction_worker import Recognizer
+from mho_assist.integrated_direction_worker import Recognizer
 
 
 class IntegratedRecognitionTests(unittest.TestCase):

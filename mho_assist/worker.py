@@ -5,12 +5,12 @@ import mss
 import numpy as np
 import uuid
 from PySide6 import QtCore
-from detector import Detector,RoundGate,SYMBOLS,yellow_feedback
-from locator import Locator
-from tracking import RegionConfirmation,capture_row,moved
-from history_store import TimingBatch,timestamp
-from autofarm import AutoFarm,Page,PageDetector,NAMES
-import windows_io as win
+from mho_assist.detector import Detector,RoundGate,SYMBOLS,yellow_feedback
+from mho_assist.locator import Locator
+from mho_assist.tracking import RegionConfirmation,capture_row,moved
+from mho_assist.history_store import TimingBatch,timestamp
+from mho_assist.autofarm import AutoFarm,Page,PageDetector,NAMES
+from mho_assist import windows_io as win
 
 class Worker(QtCore.QThread):
     preview=QtCore.Signal(object,str)

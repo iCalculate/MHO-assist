@@ -4,11 +4,13 @@ __pycache__/
 .pytest_cache/
 
 /build/
+/dist/
 /release/
 /release_v[0-9]*/
-/phone_pointer/build/
-/phone_pointer/*.apk
-/phone_pointer/*.idsig
+/phone_pointer/
+/integrations/android_pointer/build/
+/integrations/android_pointer/*.apk
+/integrations/android_pointer/*.idsig
 
 /analysis/
 /data/

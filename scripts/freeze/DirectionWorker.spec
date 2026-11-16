@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 
+project = Path(SPECPATH).resolve().parents[1]
 
 a = Analysis(
-    ['assist.py'],
-    pathex=[],
+    [str(project / 'mho_assist/integrated_direction_worker.py')],
+    pathex=[str(project)],
     binaries=[],
-    datas=[('templates', 'templates')],
+    datas=[(str(project / 'mho_assist/templates'), 'mho_assist/templates')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -21,12 +23,12 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ArrowAssist',
+    name='DirectionWorker',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False,
+    upx=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -38,7 +40,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    name='ArrowAssist',
+    name='DirectionWorker',
 )

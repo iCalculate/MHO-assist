@@ -2,14 +2,15 @@ import unittest
 from unittest.mock import MagicMock,patch
 import cv2
 import numpy as np
-from detector import Detector,Reading,RoundGate
-from tracking import RegionConfirmation,guarded_rect
-import assist
-from worker import Worker
+from mho_assist.detector import Detector,Reading,RoundGate
+from mho_assist.tracking import RegionConfirmation,guarded_rect
+from mho_assist.worker import Worker
+from qt_support import application
 
 class PopupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        application()
         cls.frame=cv2.imread('tests/fixtures/frame_36.png');cls.detector=Detector()
 
     def test_original_small_offset_failures_now_recognized(self):
@@ -72,7 +73,7 @@ class PopupTests(unittest.TestCase):
             return self.frame[box['top']:box['top']+box['height'],box['left']:box['left']+box['width']]
         cap=MagicMock();cap.__enter__.return_value=cap;cap.grab.side_effect=grab
         def sent(*args):w.running=False;return len(args[1])
-        with patch('worker.mss.mss',return_value=cap),patch('worker.Locator') as locator,patch('worker.win.is_target',return_value=True),patch('worker.win.foreground',return_value=True),patch('worker.win.client_rect',return_value=(0,0,1080,484)),patch('worker.win.send_sequence',side_effect=sent) as send,patch('worker.time.perf_counter',side_effect=clock),patch('worker.time.sleep'):
+        with patch('mho_assist.worker.mss.mss',return_value=cap),patch('mho_assist.worker.Locator') as locator,patch('mho_assist.worker.win.is_target',return_value=True),patch('mho_assist.worker.win.foreground',return_value=True),patch('mho_assist.worker.win.client_rect',return_value=(0,0,1080,484)),patch('mho_assist.worker.win.send_sequence',side_effect=sent) as send,patch('mho_assist.worker.time.perf_counter',side_effect=clock),patch('mho_assist.worker.time.sleep'):
             locator.return_value.locate.return_value=(283,377,493,54);w.run()
             self.assertEqual(send.call_count,1);self.assertGreaterEqual(locator.return_value.locate.call_count,2)
 

@@ -1,10 +1,9 @@
 """Extract the four fixed arrow glyphs from the user's reference video."""
-from pathlib import Path
 import cv2
+from mho_assist.resources import TEMPLATE_DIR
 
 def prepare(video):
-    root=Path(__file__).resolve().parent
-    (root/'templates').mkdir(exist_ok=True)
+    TEMPLATE_DIR.mkdir(exist_ok=True)
     cap=cv2.VideoCapture(str(video))
     try:
         for label,sec,x in [('down',36,480),('left',36,528),('up',36,578),('right',50,430)]:
@@ -13,12 +12,12 @@ def prepare(video):
             if not ok: raise RuntimeError(f'Cannot decode {sec}s')
             if frame.shape[:2]!=(484,1080): raise RuntimeError('Reference video dimensions changed')
             patch=cv2.cvtColor(frame[392:422,x-15:x+15],cv2.COLOR_BGR2GRAY)
-            cv2.imwrite(str(root/'templates'/f'{label}.png'),patch)
+            cv2.imwrite(str(TEMPLATE_DIR/f'{label}.png'),patch)
         cap.set(cv2.CAP_PROP_POS_MSEC,36000);ok,frame=cap.read()
         if not ok:raise RuntimeError('Cannot extract locator controls')
-        from locator import CENTERS
+        from mho_assist.locator import CENTERS
         for label,(x,y) in CENTERS.items():
-            cv2.imwrite(str(root/'templates'/f'control_{label}.png'),cv2.cvtColor(frame[y-23:y+23,x-23:x+23],cv2.COLOR_BGR2GRAY))
+            cv2.imwrite(str(TEMPLATE_DIR/f'control_{label}.png'),cv2.cvtColor(frame[y-23:y+23,x-23:x+23],cv2.COLOR_BGR2GRAY))
     finally:
         cap.release()
 

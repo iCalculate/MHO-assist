@@ -1,0 +1,12 @@
+{
+  "switchKey": "Key_Control",
+  "keyMapNodes": [
+    {"comment":"向上","type":"KMT_CLICK","key":"Key_Up","pos":{"x":0.8348,"y":0.584},"switchMap":false},
+    {"comment":"向下","type":"KMT_CLICK","key":"Key_Down","pos":{"x":0.8365,"y":0.8416},"switchMap":false},
+    {"comment":"向左","type":"KMT_CLICK","key":"Key_Left","pos":{"x":0.7749,"y":0.721},"switchMap":false},
+    {"comment":"向右","type":"KMT_CLICK","key":"Key_Right","pos":{"x":0.8932,"y":0.721},"switchMap":false},
+    {"comment":"连续刷：退出结算","type":"KMT_CLICK","key":"Key_Shift","pos":{"x":0.8982,"y":0.899},"switchMap":false},
+    {"comment":"连续刷：立即匹配","type":"KMT_CLICK","key":"Key_BracketLeft","pos":{"x":0.2052,"y":0.5277},"switchMap":false},
+    {"comment":"连续刷：确认页面","type":"KMT_CLICK","key":"Key_BracketRight","pos":{"x":0.5617,"y":0.6662},"switchMap":false}
+  ]
+}
