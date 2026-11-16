@@ -231,7 +231,7 @@ def main():
     for label, path in (
         ('Qt', args.qt / 'lib/cmake/Qt5/Qt5Config.cmake'),
         ('runtime', args.runtime / 'Qt5Core.dll'),
-        ('FFmpeg SDK', args.ffmpeg / 'lib/avcodec.lib'),
+        ('FFmpeg SDK', args.ffmpeg / 'bin/avcodec.lib'),
         ('pointer APK', args.pointer_apk),
     ):
         if not path.is_file():
