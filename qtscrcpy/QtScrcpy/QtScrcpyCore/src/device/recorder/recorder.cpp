@@ -4,6 +4,7 @@
 
 #include "compat.h"
 #include "recorder.h"
+#include "recordingtimeline.h"
 
 static const AVRational SCRCPY_TIME_BASE = { 1, 1000000 }; // timestamps in us
 
@@ -19,7 +20,7 @@ AVPacket *Recorder::packetNew(const AVPacket *packet)
     }
 
     if (av_packet_ref(rec, packet)) {
-        delete rec;
+        av_packet_free(&rec);
         return Q_NULLPTR;
     }
     return rec;
@@ -34,7 +35,7 @@ void Recorder::packetDelete(AVPacket *packet)
 void Recorder::queueClear()
 {
     while (!m_queue.isEmpty()) {
-        packetDelete(m_queue.dequeue());
+        packetDelete(m_queue.dequeue().packet);
     }
 }
 
@@ -116,7 +117,7 @@ bool Recorder::open()
     return true;
 }
 
-void Recorder::close()
+bool Recorder::close()
 {
     if (Q_NULLPTR != m_formatCtx) {
         if (m_headerWritten) {
@@ -131,14 +132,19 @@ void Recorder::close()
             // the recorded file is empty
             m_failed = true;
         }
-        avio_close(m_formatCtx->pb);
+        if (avio_close(m_formatCtx->pb) < 0) {
+            m_failed = true;
+            qCritical() << "Could not close video file:" << m_fileName;
+        }
         avformat_free_context(m_formatCtx);
         m_formatCtx = Q_NULLPTR;
     }
+    return !m_failed && m_ptsOrigin != AV_NOPTS_VALUE;
 }
 
-bool Recorder::write(AVPacket *packet)
+bool Recorder::write(const QueuedPacket &item)
 {
+    AVPacket *packet = item.packet;
     if (!m_headerWritten) {
         if (packet->pts != AV_NOPTS_VALUE) {
             qCritical("The first packet is not a config packet");
@@ -157,8 +163,23 @@ bool Recorder::write(AVPacket *packet)
         return true;
     }
 
+    if (m_ptsOrigin == AV_NOPTS_VALUE) {
+        m_ptsOrigin = packet->pts;
+    }
+    packet->pts -= m_ptsOrigin;
+    packet->dts = packet->pts;
+    const qint64 captureUs = packet->pts;
+    const bool keyframe = packet->flags & AV_PKT_FLAG_KEY;
     recorderRescalePacket(packet);
-    return av_write_frame(m_formatCtx, packet) >= 0;
+    const qint64 muxUs = av_rescale_q(packet->pts, m_formatCtx->streams[0]->time_base, SCRCPY_TIME_BASE);
+    const qint64 durationUs = av_rescale_q(packet->duration, m_formatCtx->streams[0]->time_base, SCRCPY_TIME_BASE);
+    if (av_write_frame(m_formatCtx, packet) < 0) {
+        return false;
+    }
+    if (m_timeline) {
+        m_timeline->videoFrame(item.frameIndex, captureUs, muxUs, durationUs, item.arrivalUs, keyframe);
+    }
+    return true;
 }
 
 const AVOutputFormat *Recorder::findMuxer(const char *name)
@@ -181,7 +202,7 @@ const AVOutputFormat *Recorder::findMuxer(const char *name)
 bool Recorder::recorderWriteHeader(const AVPacket *packet)
 {
     AVStream *ostream = m_formatCtx->streams[0];
-    quint8 *extradata = (quint8 *)av_malloc(packet->size * sizeof(quint8));
+    quint8 *extradata = (quint8 *)av_mallocz(packet->size + AV_INPUT_BUFFER_PADDING_SIZE);
     if (!extradata) {
         qCritical("Cannot allocate extradata");
         return false;
@@ -242,72 +263,49 @@ Recorder::RecorderFormat Recorder::guessRecordFormat(const QString &fileName)
 
 void Recorder::run()
 {
-    qint64 ptsOrigin = AV_NOPTS_VALUE;
+    // Keep one packet until the next PTS supplies its duration.
+    QueuedPacket previous{nullptr, 0, -1};
     for (;;) {
-        AVPacket *rec = Q_NULLPTR;
+        QueuedPacket current{nullptr, 0, -1};
         {
             QMutexLocker locker(&m_mutex);
             while (!m_stopped && m_queue.isEmpty()) {
                 m_recvDataCond.wait(&m_mutex);
             }
 
-            // if stopped is set, continue to process the remaining events (to
-            // finish the recording) before actually stopping
             if (m_stopped && m_queue.isEmpty()) {
-                AVPacket *last = m_previous;
-                if (last) {
-                    last->pts -= ptsOrigin;
-                    last->dts = last->pts;
-                    // assign an arbitrary duration to the last packet
-                    last->duration = 100000;
-                    bool ok = write(last);
-                    if (!ok) {
-                        // failing to write the last frame is not very serious, no
-                        // future frame may depend on it, so the resulting file
-                        // will still be valid
-                        qWarning("Could not record last packet");
-                    }
-                    packetDelete(last);
-                }
                 break;
             }
-
-            rec = m_queue.dequeue();
+            current = m_queue.dequeue();
         }
 
-        // recorder->previous is only written from this thread, no need to lock
-        AVPacket *previous = m_previous;
-        m_previous = rec;
-
-        if (!previous) {
-            // we just received the first packet
-            continue;
-        }
-
-        // config packets have no PTS, we must ignore them
-        if (rec->pts != AV_NOPTS_VALUE && previous->pts != AV_NOPTS_VALUE) {
-            // we now know the duration of the previous packet
-            previous->duration = rec->pts - previous->pts;
-        }
-
-        if (previous->pts != AV_NOPTS_VALUE) {
-            if (ptsOrigin == AV_NOPTS_VALUE) {
-                ptsOrigin = previous->pts;
+        if (previous.packet) {
+            if (current.packet->pts != AV_NOPTS_VALUE && previous.packet->pts != AV_NOPTS_VALUE) {
+                previous.packet->duration = current.packet->pts - previous.packet->pts;
             }
-            previous->pts -= ptsOrigin;
-            previous->dts = previous->pts;
-        }        
+            const bool ok = write(previous);
+            packetDelete(previous.packet);
+            if (!ok) {
+                qCritical("Could not record packet");
+                packetDelete(current.packet);
+                previous.packet = nullptr;
+                QMutexLocker locker(&m_mutex);
+                m_failed = true;
+                queueClear();
+                break;
+            }
+        }
+        previous = current;
+    }
 
-        bool ok = write(previous);
-        packetDelete(previous);
-        if (!ok) {
-            qCritical("Could not record packet");
+    if (previous.packet) {
+        previous.packet->duration = 100000;
+        if (!write(previous)) {
+            qWarning("Could not record last packet");
             QMutexLocker locker(&m_mutex);
             m_failed = true;
-            // discard pending packets
-            queueClear();
-            break;
         }
+        packetDelete(previous.packet);
     }
 
     qDebug("Recorder thread ended");
@@ -326,7 +324,7 @@ void Recorder::stopRecorder()
     m_recvDataCond.wakeOne();
 }
 
-bool Recorder::push(const AVPacket *packet)
+bool Recorder::push(const AVPacket *packet, qint64 arrivalUs)
 {
     QMutexLocker locker(&m_mutex);
     Q_ASSERT(!m_stopped);
@@ -338,7 +336,9 @@ bool Recorder::push(const AVPacket *packet)
 
     AVPacket *rec = packetNew(packet);
     if (rec) {
-        m_queue.enqueue(rec);
+        const qint64 frameIndex = m_timeline && rec->pts != AV_NOPTS_VALUE
+            ? m_timeline->receiveVideoFrame(rec->pts, arrivalUs) : -1;
+        m_queue.enqueue({rec, arrivalUs, frameIndex});
         m_recvDataCond.wakeOne();
     }
     return rec != Q_NULLPTR;

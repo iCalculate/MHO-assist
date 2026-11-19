@@ -16,6 +16,7 @@ KeyMap::~KeyMap() {}
 void KeyMap::loadKeyMap(const QString &json)
 {
     QString errorString;
+    m_wheelPinch = WheelPinch::Disabled;
     QJsonParseError jsonError;
     QJsonDocument jsonDoc;
     QJsonObject rootObj;
@@ -337,6 +338,11 @@ void KeyMap::loadKeyMap(const QString &json)
     }
     // this must be called after m_keyMapNodes is stable
     makeReverseMap();
+    if (rootObj.value("wheelPinch") == QStringLiteral("standard")) {
+        m_wheelPinch = WheelPinch::Standard;
+    } else if (rootObj.value("wheelPinch") == QStringLiteral("inverted")) {
+        m_wheelPinch = WheelPinch::Inverted;
+    }
     qInfo() << "Script updated, current keymap mode:normal, Press ~ key to switch keymap mode";
 
 parseError:

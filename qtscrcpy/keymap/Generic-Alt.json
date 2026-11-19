@@ -355,6 +355,33 @@
       "key": "MiddleButton",
       "radius": 0.12,
       "sensitivity": 1
+    },
+    {
+      "comment": "",
+      "type": "KMT_DRAG",
+      "startPos": {
+        "x": 0.6427,
+        "y": 0.866
+      },
+      "endPos": {
+        "x": 0.7226,
+        "y": 0.5494
+      },
+      "key": "Key_T",
+      "startDelay": 500,
+      "dragSpeed": 1,
+      "switchMap": false
+    },
+    {
+      "comment": "",
+      "type": "KMT_CLICK",
+      "pos": {
+        "x": 0.8371,
+        "y": 0.2685
+      },
+      "key": "Key_Enter",
+      "switchMap": false
     }
-  ]
+  ],
+  "wheelPinch": "standard"
 }

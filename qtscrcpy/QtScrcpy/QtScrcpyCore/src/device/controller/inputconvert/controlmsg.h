@@ -2,6 +2,7 @@
 #define CONTROLMSG_H
 
 #include <QBuffer>
+#include <QJsonObject>
 #include <QRect>
 #include <QString>
 
@@ -87,6 +88,7 @@ public:
 
     ControlMsgType type() const { return m_data.type; }
     QByteArray serializeData();
+    QJsonObject recordingData() const;
 
 private:
     void writePosition(QBuffer &buffer, const QRect &value);

@@ -11,9 +11,9 @@
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 
 class QJsonArray;
-class QImage;
 class QWidget;
 class FishingOverlay;
+struct FishingCatch;
 
 class FishingAssistant final : public QObject {
 public:
@@ -23,12 +23,14 @@ public:
     std::function<bool()> canSend;
     std::function<bool(int, qsc::AssistTouchPhase, const QPointF &, const QSize &)> sendTouch;
     std::function<void(bool, const QString &, int)> showStatus;
-    std::function<void(const QString &, const QImage &)> onCatch;
-    std::function<void(int)> onCompleted;
+    std::function<void(const QString &)> onRecognition;
+    std::function<void(const FishingCatch &)> onCatch;
+    std::function<void(int, bool)> onFinished;
 
     bool isRunning() const { return m_enabled; }
     void start(int rod, int bait);
-    void stop(const QString &reason = QStringLiteral("已暂停"));
+    void finish();
+    void stop(const QString &reason = QString(), bool completed = false);
     void frame(int width, int height, const uint8_t *y, const uint8_t *u, const uint8_t *v,
                int strideY, int strideU, int strideV);
 

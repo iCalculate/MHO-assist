@@ -840,7 +840,10 @@
                </sizepolicy>
               </property>
               <property name="text">
-               <string>record screen</string>
+               <string>record screen + inputs</string>
+              </property>
+              <property name="toolTip">
+               <string>Enable before connecting. Display recordings save keyboard, mouse and control events alongside the video in an .inputs.jsonl file.</string>
               </property>
              </widget>
             </item>

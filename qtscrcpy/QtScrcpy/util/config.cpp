@@ -477,6 +477,19 @@ void Config::deleteGroup(const QString &serial)
     m_userData->remove(serial);
 }
 
+QPair<int, int> Config::diagnosticChartSettings() const
+{
+    return qMakePair(m_userData->value(QStringLiteral("Diagnostics/SampleIntervalMs"), 250).toInt(),
+                     m_userData->value(QStringLiteral("Diagnostics/WindowSeconds"), 60).toInt());
+}
+
+void Config::setDiagnosticChartSettings(int sampleIntervalMs, int windowSeconds)
+{
+    m_userData->setValue(QStringLiteral("Diagnostics/SampleIntervalMs"), sampleIntervalMs);
+    m_userData->setValue(QStringLiteral("Diagnostics/WindowSeconds"), windowSeconds);
+    m_userData->sync();
+}
+
 QString Config::getLanguage()
 {
     QString language;

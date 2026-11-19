@@ -47,12 +47,16 @@ bool Decoder::open()
     return true;
 }
 
-void Decoder::close()
+void Decoder::interrupt()
 {
     if (m_vb) {
         m_vb->interrupt();
     }
+}
 
+void Decoder::close()
+{
+    interrupt();
     if (!m_codecCtx) {
         return;
     }
@@ -170,5 +174,8 @@ void Decoder::onNewFrame() {
     m_vb->lock();
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_onFrame(frame->width, frame->height, frame->data[0], frame->data[1], frame->data[2], frame->linesize[0], frame->linesize[1], frame->linesize[2]);
+    if (m_onPreview && frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+        m_onPreview(frame->best_effort_timestamp);
+    }
     m_vb->unLock();
 }

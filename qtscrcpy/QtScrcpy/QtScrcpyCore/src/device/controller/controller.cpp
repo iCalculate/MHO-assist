@@ -14,6 +14,7 @@
 #include "controlmsg.h"
 #include "inputconvertgame.h"
 #include "receiver.h"
+#include "recordingtimeline.h"
 #include "videosocket.h"
 
 Controller::Controller(std::function<qint64(const QByteArray&)> sendData, QString gameScript, QObject *parent, const QString &serial)
@@ -90,7 +91,7 @@ bool Controller::cancelDeviceTouches()
     return true;
 }
 
-void Controller::postControlMsg(ControlMsg *controlMsg)
+void Controller::postControlMsg(ControlMsg *controlMsg, bool assistant)
 {
     if (!controlMsg) {
         return;
@@ -108,7 +109,13 @@ void Controller::postControlMsg(ControlMsg *controlMsg)
         }
     }
 
-    m_postedAt.insert(controlMsg, m_inputClock.nsecsElapsed());
+    PostedControl posted;
+    posted.inputClockNs = m_inputClock.nsecsElapsed();
+    if (m_timeline) {
+        posted.recordingUs = m_timeline->nowUs();
+        posted.assistant = assistant;
+    }
+    m_postedAt.insert(controlMsg, posted);
     QCoreApplication::postEvent(this, controlMsg);
 }
 
@@ -143,7 +150,7 @@ void Controller::postAssistTouch(int finger, AndroidMotioneventAction action, co
     message->setInjectTouchMsgData(firstAssistantPointer + static_cast<quint64>(finger),
                                    action, noButtons, noButtons, QRect(position, frameSize),
                                    action == AMOTION_EVENT_ACTION_UP ? 0.0f : 1.0f);
-    postControlMsg(message);
+    postControlMsg(message, true);
 }
 
 void Controller::updateScript(QString gameScript)
@@ -174,6 +181,12 @@ bool Controller::isCurrentCustomKeymap()
 void Controller::releaseCustomKeymap()
 {
     if (auto *game = qobject_cast<InputConvertGame *>(m_inputConvert.data())) game->releaseCustomKeymap();
+}
+
+QPointF Controller::mappedTapPosition(int key) const
+{
+    auto *game = qobject_cast<InputConvertGame *>(m_inputConvert.data());
+    return game ? game->mappedTapPosition(key) : QPointF(-1, -1);
 }
 
 void Controller::postBackOrScreenOn(bool down)
@@ -382,6 +395,9 @@ void Controller::cameraZoomOut()
 
 void Controller::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)
 {
+    if (m_timeline && from) {
+        m_timeline->mouseEvent(*from, frameSize, showSize, isCurrentCustomKeymap(), deviceCancelPending());
+    }
     if (deviceCancelPending()) { return; }
     if (m_inputConvert) {
         m_inputConvert->mouseEvent(from, frameSize, showSize);
@@ -390,6 +406,9 @@ void Controller::mouseEvent(const QMouseEvent *from, const QSize &frameSize, con
 
 void Controller::wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize)
 {
+    if (m_timeline && from) {
+        m_timeline->wheelEvent(*from, frameSize, showSize, isCurrentCustomKeymap(), deviceCancelPending());
+    }
     if (deviceCancelPending()) { return; }
     if (m_inputConvert) {
         m_inputConvert->wheelEvent(from, frameSize, showSize);
@@ -398,6 +417,9 @@ void Controller::wheelEvent(const QWheelEvent *from, const QSize &frameSize, con
 
 void Controller::keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize)
 {
+    if (m_timeline && from) {
+        m_timeline->keyEvent(*from, isCurrentCustomKeymap(), deviceCancelPending());
+    }
 #ifdef Q_OS_WIN
     if (from && from->timestamp()) {
         const quint32 delay = static_cast<quint32>(GetTickCount()) - static_cast<quint32>(from->timestamp());
@@ -415,11 +437,17 @@ bool Controller::event(QEvent *event)
     if (event && static_cast<ControlMsg::Type>(event->type()) == ControlMsg::Control) {
         ControlMsg *controlMsg = dynamic_cast<ControlMsg *>(event);
         if (controlMsg) {
-            const qint64 queuedAt = m_postedAt.take(controlMsg);
+            const PostedControl posted = m_postedAt.take(controlMsg);
+            const qint64 queuedAt = posted.inputClockNs;
             m_lastQueueUs = queuedAt ? (m_inputClock.nsecsElapsed() - queuedAt) / 1000 : 0;
             const qint64 start = m_inputClock.nsecsElapsed();
-            if (!sendControl(controlMsg->serializeData())) { ++m_writeErrors; }
+            const qint64 sentUs = m_timeline ? m_timeline->nowUs() : -1;
+            const bool accepted = sendControl(controlMsg->serializeData());
+            if (!accepted) { ++m_writeErrors; }
             m_lastWriteUs = (m_inputClock.nsecsElapsed() - start) / 1000;
+            if (m_timeline) {
+                m_timeline->controlEvent(controlMsg->recordingData(), posted.recordingUs, sentUs, accepted, posted.assistant);
+            }
             ++m_controlPackets;
         }
         return true;

@@ -15,6 +15,7 @@ class QProcess;
 class Receiver;
 class InputConvertBase;
 class DeviceMsg;
+class RecordingTimeline;
 class Controller : public QObject
 {
     Q_OBJECT
@@ -22,7 +23,8 @@ public:
     Controller(std::function<qint64(const QByteArray&)> sendData, QString gameScript = "", QObject *parent = Q_NULLPTR, const QString &serial = QString());
     virtual ~Controller();
 
-    void postControlMsg(ControlMsg *controlMsg);
+    void postControlMsg(ControlMsg *controlMsg, bool assistant = false);
+    void setRecordingTimeline(RecordingTimeline *timeline) { m_timeline = timeline; }
     void setCameraMode(bool cameraMode);
     void recvDeviceMsg(DeviceMsg *deviceMsg);
     void test(QRect rc);
@@ -34,6 +36,7 @@ public:
     void updateScript(QString gameScript = "");
     bool isCurrentCustomKeymap();
     void releaseCustomKeymap();
+    QPointF mappedTapPosition(int key) const;
 
     void postGoBack();
     void postGoHome();
@@ -93,7 +96,13 @@ private:
     QPointer<QProcess> m_cancelProcess;
     bool m_shuttingDown = false;
     QElapsedTimer m_inputClock;
-    QHash<const ControlMsg *, qint64> m_postedAt;
+    struct PostedControl {
+        qint64 inputClockNs = 0;
+        qint64 recordingUs = -1;
+        bool assistant = false;
+    };
+    RecordingTimeline *m_timeline = nullptr;
+    QHash<const ControlMsg *, PostedControl> m_postedAt;
     qint64 m_lastQueueUs = 0;
     qint64 m_lastWriteUs = 0;
     quint64 m_controlPackets = 0;

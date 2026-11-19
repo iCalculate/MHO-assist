@@ -20,6 +20,7 @@ enum CameraFacing {
 };
 
 struct DeviceParams {
+    QString gameScriptName;
     // necessary
     QString serial = "";              // 设备序列号
     QString serverLocalPath = "";     // 本地安卓server路径

@@ -1,10 +1,21 @@
 #pragma once
 
+#include <QImage>
 #include <QString>
+#include <functional>
 
-class QImage;
 class QWidget;
 
-void recordFishingCatch(const QString &session, const QString &name, const QImage &label);
-void showFishingSummary(QWidget *anchor, const QString &session, int caught);
+struct FishingCatch {
+    QString name;
+    QString rarity;
+    QString size;
+    QString crown;
+    QImage nameImage;
+    QImage sizeImage;
+};
+
+using CatchRecognized = std::function<void(const FishingCatch &)>;
+void recordFishingCatch(const QString &session, const FishingCatch &fish, CatchRecognized recognized = {});
+void showFishingSummary(QWidget *anchor, const QString &session, int caught, bool completed = true);
 void showFishingHistory(QWidget *anchor);

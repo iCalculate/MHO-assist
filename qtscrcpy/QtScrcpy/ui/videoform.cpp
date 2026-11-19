@@ -3,6 +3,7 @@
 #include "../uibase/fishingassistant.h"
 #include "../uibase/fishingreport.h"
 #include "../uibase/diagnosticpanel.h"
+#include "../QtScrcpyCore/include/adbprocess.h"
 // #include <QDesktopWidget>
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -79,6 +80,7 @@ VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, int deco
 
 VideoForm::~VideoForm()
 {
+    m_batteryProcess.disconnect(this);
     delete m_fishing;
     m_fishing = nullptr;
     delete m_phonePointer;
@@ -130,8 +132,6 @@ void VideoForm::initUI()
         m_metalWidget = new MetalVideoWidget();
         ui->keepRatioWidget->setWidget(m_metalWidget);
 
-        // Diagnostics are outside the video surface.
-        m_diagnostics = new DiagnosticPanel(ui->keepRatioWidget);
     } else
 #endif
     {
@@ -140,10 +140,14 @@ void VideoForm::initUI()
         m_videoWidget->hide();
         ui->keepRatioWidget->setWidget(m_videoWidget);
 
-        // Diagnostics are outside the video surface.
-        m_diagnostics = new DiagnosticPanel(ui->keepRatioWidget);
     }
 
+    m_diagnostics = new DiagnosticPanel(ui->keepRatioWidget, IconHelper::Instance()->font());
+    const auto chartSettings = Config::getInstance().diagnosticChartSettings();
+    m_diagnostics->setGraphSettings(chartSettings.first, chartSettings.second);
+    m_diagnostics->graphSettingsChanged = [](int interval, int seconds) {
+        Config::getInstance().setDiagnosticChartSettings(interval, seconds);
+    };
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
 
     ui->keepRatioWidget->setDiagnosticsWidget(m_diagnostics);
@@ -151,6 +155,32 @@ void VideoForm::initUI()
     m_diagnosticTimer.setInterval(125);
     connect(&m_diagnosticTimer, &QTimer::timeout, this, &VideoForm::updateDiagnostics);
     m_diagnosticTimer.start();
+    m_batteryPoll.setInterval(12000);
+    m_batteryTimeout.setSingleShot(true);
+    m_batteryTimeout.setInterval(3500);
+    connect(&m_batteryPoll, &QTimer::timeout, this, &VideoForm::pollBattery);
+    connect(&m_batteryTimeout, &QTimer::timeout, &m_batteryProcess, &QProcess::kill);
+#ifdef Q_OS_WIN
+    m_batteryProcess.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
+        args->flags &= ~CREATE_NEW_CONSOLE;
+        args->flags |= CREATE_NO_WINDOW;
+    });
+#endif
+    connect(&m_batteryProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this](int code, QProcess::ExitStatus exit) {
+        m_batteryTimeout.stop();
+        const auto output = m_batteryProcess.readAllStandardOutput();
+        if (!m_diagnostics || m_batterySerial != m_serial) return;
+        const auto battery = code == 0 && exit == QProcess::NormalExit
+            ? PhoneBattery::fromAdb(QString::fromUtf8(output)) : PhoneBattery{};
+        m_diagnostics->setBattery(battery);
+    });
+    connect(&m_batteryProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            m_batteryTimeout.stop();
+            if (m_diagnostics && m_batterySerial == m_serial) m_diagnostics->setBattery({});
+        }
+    });
     m_phonePointer = new PhonePointer(videoWidget(), this);
     m_phonePointer->ordinaryMode = [this]() {
         auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
@@ -162,31 +192,26 @@ void VideoForm::initUI()
     m_direction = new DirectionAssistant(videoWidget(), this);
     m_direction->canSend = [this]() {
         auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-        if (device) {
-            const QStringList held = device->inputDiagnostics().value("heldKeys").toStringList();
-            for (const QString &key : QStringList{"Up", "Down", "Left", "Right"}) if (held.contains(key)) return false;
-        }
-        return device && isActiveWindow() && isVisible() && !isMinimized()
-            && device->isCurrentCustomKeymap() && !device->inputDiagnostics().value("pending").toBool();
+        return device && device->canAssistTouch();
     };
-    m_direction->sendKey = [this](int key, bool down) {
+    m_direction->directionPosition = [this](int key) {
         auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-        if (!device) return;
-        QKeyEvent event(down ? QEvent::KeyPress : QEvent::KeyRelease, key, Qt::NoModifier);
-        device->keyEvent(&event, m_frameSize, videoWidget()->size());
+        return device ? device->mappedTapPosition(key) : QPointF(-1, -1);
     };
-    m_direction->setMapping = [this](bool on) {
-        auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-        if (!device || device->isCurrentCustomKeymap() == on) return;
-        QKeyEvent down(QEvent::KeyPress, Qt::Key_Control, Qt::NoModifier);
-        QKeyEvent up(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
-        device->keyEvent(&down, m_frameSize, videoWidget()->size());
-        device->keyEvent(&up, m_frameSize, videoWidget()->size());
+    m_direction->sendTouch = [this](const QPointF &pos, const QSize &size, bool down) {
+        const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        constexpr int directionFinger = 2;
+        return device && device->postAssistTouch(directionFinger,
+            down ? qsc::AssistTouchPhase::Press : qsc::AssistTouchPhase::Release, pos, size);
     };
-    m_direction->showStatus = [this](QString status) { m_diagnostics->setAssistStatus(status); };
     const auto releaseCustomKeymap = [this] {
         const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
         if (device) device->releaseCustomKeymap();
+    };
+    m_direction->showStatus = [this](QString status) { m_diagnostics->setAssistStatus(status); };
+    m_direction->singleRoundFinished = [this] {
+        const QSignalBlocker blocker(m_diagnostics->assistButton);
+        m_diagnostics->assistButton->setChecked(false);
     };
     m_fishing = new FishingAssistant(this, videoWidget());
     m_fishing->canSend = [this]() {
@@ -202,10 +227,24 @@ void VideoForm::initUI()
         m_diagnostics->fishingButton->setChecked(running);
         m_diagnostics->setFishingStatus(text, caught);
     };
-    m_fishing->onCatch = [this](const QString &name, const QImage &label) {
-        recordFishingCatch(m_fishingSession, name, label);
+    const auto panel = m_diagnostics;
+    m_fishing->onRecognition = [panel](const QString &event) {
+        if (panel) panel->setFishingRecognition(event);
     };
-    m_fishing->onCompleted = [this](int caught) { showFishingSummary(this, m_fishingSession, caught); };
+    m_fishing->onCatch = [this](const FishingCatch &fish) {
+        const auto panel = m_diagnostics;
+        recordFishingCatch(m_fishingSession, fish, [panel](const FishingCatch &recognized) {
+            if (!panel) return;
+            QStringList details{recognized.name.isEmpty() ? QStringLiteral("鱼名未识别") : recognized.name};
+            if (recognized.crown == QStringLiteral("金冠") || recognized.crown == QStringLiteral("银冠")) {
+                details.append(recognized.crown);
+            }
+            panel->appendEvent(QStringLiteral("渔获 · %1").arg(details.join(QStringLiteral(" · "))));
+        });
+    };
+    m_fishing->onFinished = [this](int caught, bool completed) {
+        showFishingSummary(this, m_fishingSession, caught, completed);
+    };
     connect(m_diagnostics->fishingButton, &QToolButton::toggled, this, [this, releaseCustomKeymap](bool on) {
         if (on) {
             m_diagnostics->assistButton->setChecked(false);
@@ -214,23 +253,32 @@ void VideoForm::initUI()
             m_fishing->start(m_diagnostics->fishingRod(), m_diagnostics->fishingBait());
             if (m_fishing->isRunning()) releaseCustomKeymap();
         } else {
-            m_fishing->stop();
+            m_fishing->finish();
         }
     });
     connect(m_diagnostics->fishingHistoryAction, &QAction::triggered, this, [this] { showFishingHistory(this); });
     connect(m_diagnostics->fishingButton->menu(), &QMenu::triggered, this, [this](QAction *action) {
         if (action != m_diagnostics->fishingHistoryAction) m_fishing->stop();
     });
-    connect(m_diagnostics->assistButton, &QToolButton::toggled, this, [this](bool on) {
-        if (on) m_fishing->stop();
+    connect(m_diagnostics->assistButton, &QToolButton::toggled, this, [this, releaseCustomKeymap](bool on) {
+        if (on) {
+            m_fishing->stop();
+            releaseCustomKeymap();
+        }
         m_direction->enable(on);
     });
-    connect(m_diagnostics->regionButton, &QToolButton::toggled, this, [this](bool on) {
-        if (on) m_fishing->stop();
+    connect(m_diagnostics->continuousButton, &QCheckBox::toggled, this, [this](bool on) {
+        m_direction->setContinuous(on);
+    });
+    connect(m_diagnostics->regionButton, &QToolButton::toggled, this, [this, releaseCustomKeymap](bool on) {
+        if (on) {
+            m_fishing->stop();
+            releaseCustomKeymap();
+        }
         m_direction->edit(on);
     });
     connect(m_diagnostics->resetButton, &QToolButton::clicked, this, [this] { m_direction->resetRegion(); });
-    connect(m_diagnostics->keymapButton, &QToolButton::clicked, this, [this] {
+    connect(m_diagnostics->keymapButton, &QToolButton::clicked, this, [this, releaseCustomKeymap] {
         m_fishing->stop();
         const QDir appDir(QCoreApplication::applicationDirPath());
         const QString worker = appDir.filePath(QStringLiteral("DirectionWorker/DirectionWorker.exe"));
@@ -241,8 +289,8 @@ void VideoForm::initUI()
             QMessageBox::warning(this, QStringLiteral("按键配置"), QStringLiteral("未找到游戏按键位置编辑器启动入口。"));
             return;
         }
-        m_direction->abortInput();
-        if (m_direction->setMapping) m_direction->setMapping(false);
+        m_diagnostics->assistButton->setChecked(false);
+        releaseCustomKeymap();
         bool opened = false;
         if (bundled) {
             QProcess editor;
@@ -368,6 +416,7 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
 
 void VideoForm::setSerial(const QString &serial)
 {
+    if (serial != m_serial && m_diagnostics) m_diagnostics->setBattery({});
     m_serial = serial;
     if (m_direction) m_direction->setSerial(serial);
     if (m_phonePointer) m_phonePointer->setSerial(serial);
@@ -375,6 +424,10 @@ void VideoForm::setSerial(const QString &serial)
     m_flexDisplay = device && device->isFlexDisplay();
     if (m_flexDisplay) {
         ui->keepRatioWidget->setWidthHeightRatio(-1.0f);
+    }
+    if (!serial.isEmpty()) {
+        m_batteryPoll.start();
+        pollBattery();
     }
 }
 
@@ -785,6 +838,22 @@ void VideoForm::updateDiagnostics()
     m_diagnostics->setSnapshot(d);
 }
 
+void VideoForm::pollBattery()
+{
+    if (m_batteryProcess.state() != QProcess::NotRunning) return;
+    if (m_serial.isEmpty() || !qsc::IDeviceManage::getInstance().getDevice(m_serial)) {
+        m_batteryPoll.stop();
+        if (m_diagnostics) m_diagnostics->setBattery({});
+        return;
+    }
+    const QString adb = qsc::AdbProcess::adbPath();
+    if (adb.isEmpty()) return;
+    m_batterySerial = m_serial;
+    m_batteryTimeout.start();
+    m_batteryProcess.start(adb, {QStringLiteral("-s"), m_serial, QStringLiteral("shell"),
+        QStringLiteral("dumpsys battery; cat /sys/class/power_supply/battery/uevent 2>/dev/null || true")});
+}
+
 void VideoForm::grabCursor(bool grab)
 {
     QRect rc = getGrabCursorRect();
@@ -839,29 +908,25 @@ void VideoForm::staysOnTop(bool top)
     }
 }
 
+bool VideoForm::event(QEvent *event)
+{
+    if (event->type() == QEvent::WindowDeactivate) {
+        const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        if (device) device->recordingInputFocusLost();
+    }
+    return QWidget::event(event);
+}
+
 void VideoForm::mousePressEvent(QMouseEvent *event)
 {
     QWidget *vw = videoWidget();
     const bool overVideo = vw && vw->geometry().contains(event->pos());
+    if (m_direction && overVideo) m_direction->interrupt();
     if (m_fishing && (overVideo || event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)) {
         m_fishing->stop(QStringLiteral("手动操作，钓鱼已暂停"));
     }
     if(m_phonePointer && event->button()==Qt::LeftButton) m_phonePointer->buttonEvent(true);
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-    if (event->button() == Qt::MiddleButton) {
-        if (device && !device->isCurrentCustomKeymap()) {
-            device->postGoHome();
-            return;
-        }
-    }
-
-    if (event->button() == Qt::RightButton) {
-        if (device && !device->isCurrentCustomKeymap()) {
-            device->postGoBack();
-            return;
-        }
-    }
-
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
         QPointF localPos = event->localPos();
         QPointF globalPos = event->globalPos();
@@ -869,6 +934,19 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
         QPointF localPos = event->position();
         QPointF globalPos = event->globalPosition();
 #endif
+
+    const bool home = event->button() == Qt::MiddleButton;
+    const bool back = event->button() == Qt::RightButton;
+    if ((home || back) && device && !device->isCurrentCustomKeymap()) {
+        if (overVideo) {
+            const QPointF mappedPos = vw->mapFrom(this, localPos.toPoint());
+            const QMouseEvent mappedEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
+            device->recordMouseInput(mappedEvent, m_frameSize, vw->size());
+        }
+        if (home) device->postGoHome();
+        else device->postGoBack();
+        return;
+    }
 
     if (overVideo) {
         if (!device) {
@@ -1024,18 +1102,23 @@ void VideoForm::wheelEvent(QWheelEvent *event)
 
 void VideoForm::keyPressEvent(QKeyEvent *event)
 {
-    if (m_fishing && m_fishing->isRunning() && isDesktopSwitchKey(*event)) {
+    const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    const bool fishingRunning = m_fishing && m_fishing->isRunning();
+    if (fishingRunning && isDesktopSwitchKey(*event)) {
+        if (device) device->recordLocalKeyInput(*event);
         event->ignore();
         return;
     }
-    if (event->key() == Qt::Key_Escape && (m_fishingEscape || (m_fishing && m_fishing->isRunning()))) {
-        m_fishingEscape = true;
-        m_fishing->stop();
+    if (event->key() == Qt::Key_Escape && (m_assistantEscape || fishingRunning)) {
+        if (device) device->recordLocalKeyInput(*event);
+        m_assistantEscape = true;
+        if (m_fishing) m_fishing->finish();
         event->accept();
         return;
     }
     if (m_fishing) m_fishing->stop(QStringLiteral("手动操作，钓鱼已暂停"));
     if (event->key() == Qt::Key_F8 || event->key() == Qt::Key_F9 || event->key() == Qt::Key_F7) {
+        if (device) device->recordLocalKeyInput(*event);
         if (!event->isAutoRepeat()) {
             if (event->key() == Qt::Key_F8) m_diagnostics->assistButton->toggle();
             else if (event->key() == Qt::Key_F9) m_diagnostics->assistButton->setChecked(false);
@@ -1043,9 +1126,8 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
         }
         event->accept(); return;
     }
-    if (m_direction && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down || event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)) m_direction->abortInput();
+    if (m_direction && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down || event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)) m_direction->interrupt();
 
-    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!device) {
         return;
     }
@@ -1060,18 +1142,25 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
 
 void VideoForm::keyReleaseEvent(QKeyEvent *event)
 {
-    if (m_fishing && m_fishing->isRunning() && isDesktopSwitchKey(*event)) {
+    const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    const bool fishingRunning = m_fishing && m_fishing->isRunning();
+    if (fishingRunning && isDesktopSwitchKey(*event)) {
+        if (device) device->recordLocalKeyInput(*event);
         event->ignore();
         return;
     }
-    if (event->key() == Qt::Key_Escape && m_fishingEscape) {
-        if (!event->isAutoRepeat()) m_fishingEscape = false;
+    if (event->key() == Qt::Key_Escape && m_assistantEscape) {
+        if (device) device->recordLocalKeyInput(*event);
+        if (!event->isAutoRepeat()) m_assistantEscape = false;
         event->accept();
         return;
     }
-    if (event->key() == Qt::Key_F8 || event->key() == Qt::Key_F9 || event->key() == Qt::Key_F7) { event->accept(); return; }
+    if (event->key() == Qt::Key_F8 || event->key() == Qt::Key_F9 || event->key() == Qt::Key_F7) {
+        if (device) device->recordLocalKeyInput(*event);
+        event->accept();
+        return;
+    }
 
-    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!device) {
         return;
     }
@@ -1119,7 +1208,11 @@ void VideoForm::resizeEvent(QResizeEvent *event)
 
 void VideoForm::closeEvent(QCloseEvent *event)
 {
-    if (m_fishing) m_fishing->stop();
+    m_batteryPoll.stop();
+    m_batteryTimeout.stop();
+    m_batterySerial.clear();
+    if (m_batteryProcess.state() != QProcess::NotRunning) m_batteryProcess.kill();
+    if (m_fishing) m_fishing->finish();
     if (m_direction) m_direction->stop();
     if (m_phonePointer) m_phonePointer->enable(false);
     Q_UNUSED(event)

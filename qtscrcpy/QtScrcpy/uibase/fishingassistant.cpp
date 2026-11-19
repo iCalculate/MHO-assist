@@ -1,4 +1,5 @@
 #include "fishingassistant.h"
+#include "fishingreport.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -169,7 +170,8 @@ private:
 };
 
 FishingAssistant::FishingAssistant(QObject *parent, QWidget *video)
-    : QObject(parent), m_overlay(video ? new FishingOverlay(video) : nullptr)
+    : QObject(parent),
+      m_overlay(video ? new FishingOverlay(video) : nullptr)
 {
     m_clock.start();
     m_watchdog.setInterval(frameInterval);
@@ -203,6 +205,7 @@ FishingAssistant::FishingAssistant(QObject *parent, QWidget *video)
 FishingAssistant::~FishingAssistant()
 {
     showStatus = nullptr;
+    onFinished = nullptr;
     stop();
     if (m_worker.state() != QProcess::NotRunning) {
         m_worker.waitForFinished(300);
@@ -212,6 +215,9 @@ FishingAssistant::~FishingAssistant()
 
 void FishingAssistant::start(int rod, int bait)
 {
+    if (m_enabled) {
+        return;
+    }
     if (!canSend || !canSend()) {
         status(QStringLiteral("请先连接开启触控的横屏投屏"));
         return;
@@ -242,11 +248,16 @@ void FishingAssistant::start(int rod, int bait)
     m_watchdog.start();
     status(QStringLiteral("正在启动钓鱼识别"));
     m_worker.start(python, {QStringLiteral("-B"), QStringLiteral("-u"), script,
-                           QStringLiteral("--rod"), QString::number(rod),
-                           QStringLiteral("--bait"), QString::number(bait)});
+                            QStringLiteral("--rod"), QString::number(rod),
+                            QStringLiteral("--bait"), QString::number(bait)});
 }
 
-void FishingAssistant::stop(const QString &reason)
+void FishingAssistant::finish()
+{
+    stop(QStringLiteral("已结束钓鱼"), true);
+}
+
+void FishingAssistant::stop(const QString &reason, bool completed)
 {
     if (!m_enabled) {
         return;
@@ -258,7 +269,8 @@ void FishingAssistant::stop(const QString &reason)
     if (m_worker.state() != QProcess::NotRunning) {
         m_worker.kill();
     }
-    status(reason);
+    status(reason.isEmpty() ? QStringLiteral("已停止钓鱼") : reason);
+    if (onFinished) onFinished(m_caught, completed);
 }
 
 void FishingAssistant::releaseTouches()
@@ -341,16 +353,18 @@ void FishingAssistant::readReply()
         const int previousCaught = m_caught;
         m_caught = reply.value("caught").toInt();
         if (onCatch && m_caught > previousCaught) {
-            const QString name = reply.value("catchName").toString();
-            const auto encoded = reply.value("catchLabel").toString().toLatin1();
-            onCatch(name, encoded.isEmpty() ? QImage() : QImage::fromData(QByteArray::fromBase64(encoded), "JPEG"));
+            const auto details = reply.value("catch").toObject();
+            const auto decode = [&details](const char *key) {
+                const auto encoded = details.value(QLatin1String(key)).toString().toLatin1();
+                return encoded.isEmpty() ? QImage() : QImage::fromData(QByteArray::fromBase64(encoded), "JPEG");
+            };
+            onCatch({details.value("name").toString(), details.value("rarity").toString(),
+                     details.value("size").toString(), details.value("crown").toString(),
+                     decode("nameImage"), decode("sizeImage")});
         }
         const QString message = reply.value("status").toString();
         if (!reply.value("active").toBool()) {
-            stop(message);
-            if (reply.value("completed").toBool() && onCompleted) {
-                onCompleted(m_caught);
-            }
+            stop(message, reply.value("completed").toBool());
             return;
         }
         if (!canSend || !canSend()) {
@@ -362,9 +376,10 @@ void FishingAssistant::readReply()
             return;
         }
         if (m_overlay) m_overlay->setMarks(reply.value("marks").toArray());
+        if (onRecognition) onRecognition(reply.value("recognition").toString());
         status(message);
     }
-    if (m_enabled && m_output.size() > 16384) {
+    if (m_enabled && m_output.size() > 32768) {
         stop(QStringLiteral("钓鱼识别器返回了无效数据"));
     }
 }
@@ -413,7 +428,9 @@ void FishingAssistant::watch()
         }
     } else if (!canSend || !canSend()) {
         stop(QStringLiteral("手机触控不可用，钓鱼已暂停"));
-    } else if (now - m_lastFrame > 500 || (m_pending && now - m_requested > responseDeadline)) {
+    } else if (m_pending && now - m_requested > responseDeadline) {
+        stop(QStringLiteral("投屏画面或识别中断，钓鱼已暂停"));
+    } else if (now - m_lastFrame > 500) {
         stop(QStringLiteral("投屏画面或识别中断，钓鱼已暂停"));
     }
 }

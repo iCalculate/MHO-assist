@@ -39,6 +39,8 @@ public:
     };
     Q_ENUM(ActionType)
 
+    enum class WheelPinch { Disabled, Standard, Inverted };
+
     struct DelayClickNode
     {
         int delay = 0;
@@ -128,6 +130,7 @@ public:
     virtual ~KeyMap();
 
     void loadKeyMap(const QString &json);
+    WheelPinch wheelPinch() const { return m_wheelPinch; }
     const KeyMap::KeyMapNode &getKeyMapNode(int key);
     const KeyMap::KeyMapNode &getKeyMapNodeKey(int key);
     const KeyMap::KeyMapNode &getKeyMapNodeMouse(int key);
@@ -170,6 +173,7 @@ private:
 private:
     static QString s_keyMapPath;
 
+    WheelPinch m_wheelPinch = WheelPinch::Disabled;
     QVector<KeyMapNode> m_keyMapNodes;
     KeyNode m_switchKey = { AT_KEY, Qt::Key_QuoteLeft };
 

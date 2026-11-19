@@ -11,6 +11,7 @@
 #include "device.h"
 #include "filehandler.h"
 #include "recorder.h"
+#include "recordingtimeline.h"
 #include "server.h"
 #include "demuxer.h"
 
@@ -86,24 +87,14 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
 
     m_server = new Server(this);
     if (m_params.recordFile && !m_params.recordPath.trimmed().isEmpty()) {
-        QString absFilePath;
-        QString fileDir(m_params.recordPath);
-        if (!fileDir.isEmpty()) {
-            QDateTime dateTime = QDateTime::currentDateTime();
-            QString fileName = dateTime.toString("_yyyyMMdd_hhmmss_zzz");
-            fileName = m_params.serial + fileName;
-            fileName.replace(":", "_");
-            fileName.replace(".", "_");
-            fileName += ("." + m_params.recordFileFormat);
-            QDir dir(fileDir);
-            if (!dir.exists()) {
-                if (!dir.mkpath(fileDir)) {
-                    qCritical() << QString("Failed to create the save folder: %1").arg(fileDir);
-                }
-            }
-            absFilePath = dir.absoluteFilePath(fileName);
+        const QDir dir(m_params.recordPath);
+        if (!dir.exists() && !QDir().mkpath(dir.absolutePath())) {
+            qCritical() << "Failed to create the recording folder:" << dir.absolutePath();
+        } else {
+            QString name = m_params.serial + QDateTime::currentDateTime().toString("_yyyyMMdd_hhmmss_zzz");
+            name.replace(":", "_").replace(".", "_");
+            m_recorder = new Recorder(dir.absoluteFilePath(name + "." + m_params.recordFileFormat), this);
         }
-        m_recorder = new Recorder(absFilePath, this);
     }
     initSignals();
 }
@@ -148,14 +139,32 @@ bool Device::isFlexDisplay() const
     return m_params.flexDisplay;
 }
 
-void Device::updateScript(QString script)
+void Device::updateScript(QString script, const QString &name)
 {
     if (isCameraMode()) {
         return;
     }
     if (m_controller) {
         m_controller->updateScript(script);
+        m_params.gameScript = script;
+        m_params.gameScriptName = name;
+        if (m_recordingTimeline) m_recordingTimeline->setKeymap(name, script);
     }
+}
+
+void Device::recordingInputFocusLost()
+{
+    if (m_recordingTimeline) m_recordingTimeline->cancelHeldInputs("window_deactivated");
+}
+
+void Device::recordLocalKeyInput(const QKeyEvent &event)
+{
+    if (m_recordingTimeline) m_recordingTimeline->keyEvent(event, isCurrentCustomKeymap(), false, true);
+}
+
+void Device::recordMouseInput(const QMouseEvent &event, const QSize &frame, const QSize &view)
+{
+    if (m_recordingTimeline) m_recordingTimeline->mouseEvent(event, frame, view, isCurrentCustomKeymap(), false);
 }
 
 void Device::screenshot()
@@ -271,10 +280,25 @@ void Device::initSignals()
                     m_recorder->setFrameSize(size);
                     if (!m_recorder->open()) {
                         qCritical("Could not open recorder");
-                    }
-
-                    if (!m_recorder->startRecorder()) {
-                        qCritical("Could not start recorder");
+                        delete m_recorder.data();
+                    } else {
+                        if (!isCameraMode()) {
+                            m_recordingTimeline.reset(new RecordingTimeline(m_recorder->fileName()));
+                            if (!m_recordingTimeline->open(size)) {
+                                m_recordingTimeline.reset();
+                            } else {
+                                auto *timeline = m_recordingTimeline.get();
+                                m_recorder->setTimeline(timeline);
+                                if (m_controller) {
+                                    timeline->setKeymap(m_params.gameScriptName, m_params.gameScript);
+                                    m_controller->setRecordingTimeline(timeline);
+                                }
+                                if (auto *decoder = qobject_cast<Decoder *>(m_decoder.data())) {
+                                    decoder->setPreviewObserver([timeline](qint64 pts) { timeline->previewFrame(pts); });
+                                }
+                            }
+                        }
+                        m_recorder->startRecorder();
                     }
                 }
 
@@ -350,12 +374,11 @@ void Device::initSignals()
             qDebug() << "stream thread stop";
         });
         connect(m_stream, &Demuxer::getFrame, this, [this](AVPacket *packet) {
+            if (m_recorder && !m_recorder->push(packet, m_recordingTimeline ? m_recordingTimeline->nowUs() : 0)) {
+                qCritical("Could not send packet to recorder");
+            }
             if (m_decoder && !m_decoder->push(packet)) {
                 qCritical("Could not send packet to decoder");
-            }
-
-            if (m_recorder && !m_recorder->push(packet)) {
-                qCritical("Could not send packet to recorder");
             }
         }, Qt::DirectConnection);
         connect(m_stream, &Demuxer::getConfigFrame, this, [this](AVPacket *packet) {
@@ -446,6 +469,14 @@ void Device::disconnectDevice()
     m_server->stop();
     m_server = Q_NULLPTR;
 
+    if (auto *decoder = qobject_cast<Decoder *>(m_decoder.data())) {
+        decoder->interrupt();
+        decoder->setPreviewObserver({});
+    }
+    if (m_recordingTimeline) {
+        m_recordingTimeline->cancelHeldInputs("recording_end");
+        if (m_controller) m_controller->setRecordingTimeline(nullptr);
+    }
     if (m_stream) {
         m_stream->stopDecode();
     }
@@ -460,7 +491,8 @@ void Device::disconnectDevice()
             m_recorder->stopRecorder();
             m_recorder->wait();
         }
-        m_recorder->close();
+        const bool complete = m_recorder->close();
+        if (m_recordingTimeline) m_recordingTimeline->close(complete);
     }
 
     if (m_serverStartSuccess) {
@@ -881,6 +913,11 @@ bool Device::isCurrentCustomKeymap()
 void Device::releaseCustomKeymap()
 {
     if (m_controller) m_controller->releaseCustomKeymap();
+}
+
+QPointF Device::mappedTapPosition(int key) const
+{
+    return m_controller ? m_controller->mappedTapPosition(key) : QPointF(-1, -1);
 }
 
 bool Device::saveFrame(int width, int height, uint8_t* dataRGB32)

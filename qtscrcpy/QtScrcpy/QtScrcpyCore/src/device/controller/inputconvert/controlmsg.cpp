@@ -134,6 +134,49 @@ void ControlMsg::setResizeDisplayData(const QSize &size)
     m_data.resizeDisplay.height = static_cast<quint16>(qBound(1, size.height(), 0xffff));
 }
 
+QJsonObject ControlMsg::recordingData() const
+{
+    QJsonObject row{{"control_type", int(m_data.type)}};
+    const auto addPosition = [&row](const QRect &position) {
+        row.insert("x", position.x());
+        row.insert("y", position.y());
+        row.insert("frame_width", position.width());
+        row.insert("frame_height", position.height());
+    };
+    switch (m_data.type) {
+    case CMT_INJECT_KEYCODE:
+        row.insert("action", "android_key");
+        row.insert("android_action", int(m_data.injectKeycode.action));
+        row.insert("android_keycode", int(m_data.injectKeycode.keycode));
+        row.insert("repeat", static_cast<double>(m_data.injectKeycode.repeat));
+        row.insert("metastate", int(m_data.injectKeycode.metastate));
+        break;
+    case CMT_INJECT_TOUCH:
+        row.insert("action", "touch");
+        row.insert("android_action", int(m_data.injectTouch.action));
+        row.insert("pointer_id", QString::number(m_data.injectTouch.id));
+        row.insert("pressure", m_data.injectTouch.pressure);
+        row.insert("action_buttons", int(m_data.injectTouch.actionButtons));
+        row.insert("buttons", int(m_data.injectTouch.buttons));
+        addPosition(m_data.injectTouch.position);
+        break;
+    case CMT_INJECT_SCROLL:
+        row.insert("action", "scroll");
+        row.insert("hscroll", qBound(-16.0f, m_data.injectScroll.hScroll, 16.0f));
+        row.insert("vscroll", qBound(-16.0f, m_data.injectScroll.vScroll, 16.0f));
+        row.insert("buttons", int(m_data.injectScroll.buttons));
+        addPosition(m_data.injectScroll.position);
+        break;
+    case CMT_BACK_OR_SCREEN_ON:
+        row.insert("action", "back_or_screen_on");
+        row.insert("android_action", int(m_data.backOrScreenOn.action));
+        break;
+    default:
+        break;
+    }
+    return row;
+}
+
 void ControlMsg::writePosition(QBuffer &buffer, const QRect &value)
 {
     BufferUtil::write32(buffer, value.left());

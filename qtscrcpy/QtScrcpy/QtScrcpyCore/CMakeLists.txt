@@ -112,6 +112,8 @@ set(QSC_DEVICE_SOURCES
     src/device/filehandler/filehandler.cpp
     src/device/recorder/recorder.h
     src/device/recorder/recorder.cpp
+    src/device/recorder/recordingtimeline.h
+    src/device/recorder/recordingtimeline.cpp
     src/device/server/server.h
     src/device/server/server.cpp
     src/device/server/tcpserver.h

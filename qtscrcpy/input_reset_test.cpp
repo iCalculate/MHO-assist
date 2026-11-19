@@ -1,8 +1,10 @@
 #include <QApplication>
 #include <QWidget>
+#include <QWheelEvent>
 #include <QTest>
 #include <QtEndian>
 #include <QFile>
+#include <QHash>
 #include <QSet>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -36,11 +38,12 @@ int main(int argc, char **argv) {
     require(file.open(QIODevice::ReadOnly), "profile could not be opened");
     const QString profile = QString::fromUtf8(file.readAll());
     QSet<quint64> active;
-    int downs = 0, ups = 0, moves = 0;
+    int downs = 0, ups = 0, moves = 0, scrolls = 0;
     struct TouchPacket { int action; QPoint pos; qint64 time; quint64 id; };
     QVector<TouchPacket> packets;
     QElapsedTimer packetClock; packetClock.start();
     Controller controller([&](const QByteArray &data) -> qint64 {
+        if (!data.isEmpty() && static_cast<unsigned char>(data[0]) == 3) { ++scrolls; }
         if (data.size() >= 32 && static_cast<unsigned char>(data[0]) == 2) {
             const auto action = static_cast<unsigned char>(data[1]);
             const auto id = qFromBigEndian<quint64>(reinterpret_cast<const uchar *>(data.constData()+2));
@@ -267,6 +270,151 @@ int main(int argc, char **argv) {
     require(packets.isEmpty(), "the late middle release after focus loss must not inject another touch");
     controller.updateScript(profile); flush();
     std::cout << "PASS: radial wheel anchor, relative drag, radius, simultaneous WASD, selection and camera restoration\n";
+
+
+    const QPointF firstCursor(375, 211);
+    const QPointF secondCursor(610, 315);
+    auto scroll = [&](int angle, QPointF cursor = QPointF(375, 211)) {
+        QWheelEvent event(cursor, cursor, QPoint(), QPoint(0, angle), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        controller.wheelEvent(&event, size, wheelViewSize);
+        flush();
+    };
+    packets.clear();
+    const int previousScrolls = scrolls;
+    scroll(120);
+    require(packets.isEmpty() && scrolls == previousScrolls + 1,
+            "a legacy profile must forward normal-mode scrolling as an Android scroll event");
+
+    QJsonObject pinchProfile = QJsonDocument::fromJson(profile.toUtf8()).object();
+    auto setPinchMapping = [&](const QString &direction) {
+        pinchProfile["wheelPinch"] = direction;
+        controller.updateScript(QString::fromUtf8(QJsonDocument(pinchProfile).toJson(QJsonDocument::Compact)));
+        flush();
+    };
+    auto checkCenter = [&](QPoint a, QPoint b, QPointF cursor) {
+        const QPoint expected(qRound(cursor.x() * size.width() / wheelViewSize.width()),
+                              qRound(cursor.y() * size.height() / wheelViewSize.height()));
+        require((a + b - 2 * expected).manhattanLength() <= 2,
+                "the midpoint of the two touches must match the cursor in device coordinates");
+    };
+    auto waitForPinches = [&](int expectedGestures) {
+        for (int elapsed = 0; elapsed < 1000; elapsed += 10) {
+            int released = 0;
+            for (const auto &packet : packets) {
+                if (packet.action == 1) { ++released; }
+            }
+            if (released == 2 * expectedGestures && active.isEmpty()) { return; }
+            QTest::qWait(10);
+            flush();
+        }
+        require(false, "the gesture must lift both pointers");
+    };
+    auto verifyPinch = [&](bool expands, QPointF cursor) {
+        require(packets.size() == 2 && packets[0].action == 0 && packets[1].action == 0 && active.size() == 2,
+                "scrolling in normal mode must press two distinct pointers");
+        checkCenter(packets[0].pos, packets[1].pos, cursor);
+        const int startSpan = (packets[1].pos - packets[0].pos).manhattanLength();
+        require(startSpan > 0, "the pinch pointers must have distinct starting locations");
+        waitForPinches(1);
+        const auto firstId = packets[0].id;
+        const auto secondId = packets[1].id;
+        QHash<quint64, QPoint> positions{{firstId, packets[0].pos}, {secondId, packets[1].pos}};
+        const QPoint initialSum = positions[firstId] + positions[secondId];
+        QPoint peakShiftTwice;
+        for (const auto &packet : packets) {
+            if (packet.action != 2) { continue; }
+            positions[packet.id] = packet.pos;
+            const QPoint shiftTwice = positions[firstId] + positions[secondId] - initialSum;
+            peakShiftTwice.setX(qMax(peakShiftTwice.x(), qAbs(shiftTwice.x())));
+            peakShiftTwice.setY(qMax(peakShiftTwice.y(), qAbs(shiftTwice.y())));
+        }
+        std::cout << "PINCH: " << (expands ? "expand" : "contract")
+                  << ", cursor=(" << cursor.x() << "," << cursor.y() << ")"
+                  << ", peak midpoint shift (px) X=" << peakShiftTwice.x() / 2.0
+                  << ", Y=" << peakShiftTwice.y() / 2.0 << '\n';
+        require(peakShiftTwice.x() == 0, "the midpoint must stay fixed horizontally after each individual MOVE");
+        require(peakShiftTwice.y() <= 8, "the midpoint may move by at most four vertical pixels in this fixture");
+
+        const auto &firstUp = packets[packets.size() - 2];
+        const auto &secondUp = packets.last();
+        require(packets.size() >= 6 && firstUp.action == 1 && secondUp.action == 1,
+                "a pinch must move and then lift both pointers");
+        checkCenter(firstUp.pos, secondUp.pos, cursor);
+        const int finalSpan = (firstUp.pos - secondUp.pos).manhattanLength();
+        require(expands ? finalSpan > startSpan : finalSpan < startSpan,
+                "pinch span must change in the configured direction");
+        for (const auto &packet : packets) {
+            require(QRect(QPoint(), size).contains(packet.pos), "pinch fingers must stay within the device screen");
+        }
+    };
+
+    setPinchMapping(QStringLiteral("standard"));
+    toggle();
+    packets.clear();
+    scroll(120);
+    require(packets.isEmpty(), "the custom control mode must not pinch");
+    toggle();
+    scroll(60);
+    require(packets.isEmpty(), "high-resolution wheel deltas must accumulate to a detent");
+    scroll(60);
+    verifyPinch(true, firstCursor);
+    packets.clear();
+    scroll(-120, secondCursor);
+    verifyPinch(false, secondCursor);
+
+    packets.clear();
+    const QPointF edgeCursor(5, 270);
+    scroll(120, edgeCursor);
+    verifyPinch(true, edgeCursor);
+    require(packets[0].pos.x() == packets[1].pos.x(), "near the left edge, fingers must spread vertically");
+
+    packets.clear();
+    const QPointF topCursor(375, 0);
+    scroll(120, topCursor);
+    // The minimum outer radius needs an 81-device-pixel inset at this boundary.
+    verifyPinch(true, QPointF(topCursor.x(), 40.5));
+
+    packets.clear();
+    scroll(120, firstCursor);
+    scroll(-120, secondCursor);
+    waitForPinches(2);
+    QVector<QPoint> starts;
+    for (const auto &packet : packets) {
+        if (packet.action == 0) { starts.append(packet.pos); }
+    }
+    require(starts.size() == 4, "each queued detent must press its own two fingers");
+    checkCenter(starts[0], starts[1], firstCursor);
+    checkCenter(starts[2], starts[3], secondCursor);
+
+    setPinchMapping(QStringLiteral("inverted"));
+    packets.clear();
+    scroll(120);
+    verifyPinch(false, firstCursor);
+    scroll(360);
+    QEvent pinchDeactivate(QEvent::WindowDeactivate);
+    QCoreApplication::sendEvent(&window, &pinchDeactivate);
+    flush();
+    require(active.isEmpty() && !controller.isCurrentCustomKeymap(),
+            "focus loss in normal mode must release both fingers while zooming");
+    packets.clear();
+    QTest::qWait(180);
+    flush();
+    require(packets.isEmpty(), "focus loss must discard queued wheel gestures");
+
+    scroll(120);
+    mouse(QEvent::MouseButtonPress);
+    require(active.size() == 1 && packets.last().action == 0,
+            "a normal click must interrupt the pinch and create one touch");
+    packets.clear();
+    scroll(120);
+    require(packets.isEmpty(), "scrolling during a held normal click must not add two more fingers");
+    mouse(QEvent::MouseButtonRelease);
+    require(active.isEmpty(), "the normal click must release cleanly after an interrupted pinch");
+
+    controller.updateScript(profile);
+    flush();
+    std::cout << "PASS: normal-mode wheel tracks the cursor, handles edges, keeps queued anchors and releases fingers\n";
 
     for (int i=0;i<50;++i) {
         toggle();key(Qt::Key_W,QEvent::KeyPress);toggle();key(Qt::Key_W,QEvent::KeyRelease);

@@ -2,6 +2,7 @@
 #define VIDEOFORM_H
 
 #include <QPointer>
+#include <QProcess>
 #include <QTimer>
 #include <QWidget>
 
@@ -52,6 +53,7 @@ private:
     QMargins getMargins(bool vertical);
     void initUI();
     void updateDiagnostics();
+    void pollBattery();
 
     void showToolForm(bool show = true);
     void moveCenter();
@@ -59,6 +61,7 @@ private:
     QRect getScreenRect();
 
 protected:
+    bool event(QEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -94,10 +97,14 @@ private:
 
     QPointer<DiagnosticPanel> m_diagnostics;
     QTimer m_diagnosticTimer;
+    QTimer m_batteryPoll;
+    QTimer m_batteryTimeout;
+    QProcess m_batteryProcess;
+    QString m_batterySerial;
     DirectionAssistant *m_direction = nullptr;
     FishingAssistant *m_fishing = nullptr;
     QString m_fishingSession;
-    bool m_fishingEscape = false;
+    bool m_assistantEscape = false;
     PhonePointer *m_phonePointer = nullptr;
 
     //inside member

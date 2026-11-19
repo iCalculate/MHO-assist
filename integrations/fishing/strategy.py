@@ -8,6 +8,8 @@ from vision import ACTION, BAITS, CONTINUE, GEAR_CLOSE, RETURN, RODS, START, STI
 
 SAFE_AIM = (960, 450)
 FISH_GROUP_RADIUS = 118
+EMPTY_SCAN_SECONDS = 6.0
+EMPTY_SCAN_FRAMES = 20
 
 
 PHASE_LABELS = {
@@ -90,7 +92,8 @@ class FishingStrategy:
         self.cast_live = False
         self.struck = False
         self.reel_ready_at = now
-        self.wait_for_green = False
+        self.last_tension = None
+        self.reel_guard = False
         self.steer_streak = 0
         self.last_steer = 0
         self.last_hook = None
@@ -173,13 +176,14 @@ class FishingStrategy:
             if phase in (Phase.BITE, Phase.REEL):
                 self.no_bites = 0
             if phase == Phase.REEL:
-                self.wait_for_green = False
+                self.last_tension = None
+                self.reel_guard = False
         elif phase == Phase.RESULT:
             self.caught += int(self.cast_live)
             self.no_bites = self.failures = 0
             self.cast_live = False
 
-    def update(self, observation, now):
+    def update(self, observation, now, result_ready=True):
         self.tick(now)
         if not self.active:
             return
@@ -187,6 +191,7 @@ class FishingStrategy:
         if self.phase == Phase.REEL and (phase != Phase.REEL or observation.fish_red):
             self.release()
             self.reel_ready_at = now + 0.18
+            self.last_tension = None
         if phase == Phase.UNKNOWN:
             self.candidate, self.frames = phase, 0
             self.empty_since = None
@@ -194,6 +199,10 @@ class FishingStrategy:
             if self.exit_started is not None:
                 self._exit_pond(observation, now)
                 return
+            if self.phase == Phase.AIM and now - self.last_seen > 0.50:
+                self.phase = Phase.UNKNOWN
+                self.tracks.clear()
+                self.target = None
             if now - self.last_seen > 12.0:
                 self.stop("未识别到钓鱼界面，已暂停")
             elif now - self.last_seen > 0.45:
@@ -204,6 +213,10 @@ class FishingStrategy:
             self.candidate, self.frames = phase, 0
         self.frames += 1
         if self.frames < 2:
+            return
+        if phase == Phase.RESULT and self.cast_live and not result_ready:
+            self.release()
+            self.status = "正在读取渔获信息"
             return
         if self.phase != phase:
             self.release()
@@ -243,7 +256,7 @@ class FishingStrategy:
             self.stop("无法开始钓鱼，请检查鱼饵和钓点")
 
     def _track_fish(self, points, now):
-        available = [track for track in self.tracks if now - track.last_seen < 0.24]
+        available = [track for track in self.tracks if now - track.last_seen < 0.40]
         self.tracks = available.copy()
         for point in points:
             nearest = min(available, default=None, key=lambda track: hypot(
@@ -259,10 +272,13 @@ class FishingStrategy:
 
     def confirmed_fish(self, now):
         return [track.position for track in self.tracks if track.hits >= 3
-                and track.last_seen - track.first_seen >= 0.24 and now - track.last_seen < 0.16]
+                and track.last_seen - track.first_seen >= 0.21 and now - track.last_seen < 0.24]
 
     def _aim(self, observation, now):
         reticle = observation.reticle
+        if not observation.view_stable:
+            self.tracks.clear()
+            self.empty_since = None
         self._track_fish(observation.fish_points, now)
         cast_attempt = self.attempts.get("cast")
         if cast_attempt is not None and now - cast_attempt[1] < 1.5:
@@ -291,18 +307,22 @@ class FishingStrategy:
         self.last_castable = reticle
         self.recovery_steps = 0
         self.castable_frames += 1
-        if now < self.aim_settle or self.castable_frames < 2:
+        if not observation.view_stable or now < self.aim_settle or self.castable_frames < 2:
             self.empty_since = None
             return
 
         targets = self.confirmed_fish(now)
         if not targets:
             self.target = None
-            if observation.return_available:
+            pending_fish = observation.fish_pending or any(now - track.last_seen < 0.24 for track in self.tracks)
+            if observation.return_available and not pending_fish:
                 if self.empty_since is None:
                     self.empty_since = now
+                    self.empty_frames = 0
+                self.empty_frames += 1
                 self.status = "正在检查是否还有鱼标"
-                if now - self.empty_since >= 3.0:
+                if (now - self.empty_since >= EMPTY_SCAN_SECONDS and self.empty_frames >= EMPTY_SCAN_FRAMES
+                        and not observation.fish_points):
                     self.exit_started = now
                     self._exit_pond(observation, now)
             else:
@@ -346,7 +366,12 @@ class FishingStrategy:
 
     def _exit_pond(self, observation, now):
         self.status = "未发现鱼标，正在退出钓点"
-        if "close_pond" in self.attempts and observation.phase == Phase.UNKNOWN and now - self.last_seen >= 0.40:
+        if (observation.phase == Phase.AIM and observation.reticle is not None and
+                (observation.fish_points or observation.fish_pending)):
+            self.exit_started = self.empty_since = None
+            self.attempts.pop("leave_pond", None)
+            self._aim(observation, now)
+        elif "close_pond" in self.attempts and observation.phase == Phase.UNKNOWN and now - self.last_seen >= 0.65:
             self.completed = True
             self.stop("钓点无鱼，已退出")
         elif now - self.exit_started > 8.0:
@@ -387,14 +412,26 @@ class FishingStrategy:
     def _reel(self, observation, now):
         if observation.fish_red:
             self.status = "鱼标变红，停止收线和摆杆"
-            self.reel_ready_at = now + 0.18
-            self.wait_for_green = True
+            self.reel_ready_at = now + 0.22
+            self.last_tension = None
+            self.reel_guard = True
             self.steer_streak = self.last_steer = 0
             self.release()
             return
-        if not observation.fish_visible or now < self.reel_ready_at:
+        if not observation.fish_visible:
+            self.reel_guard = True
+            self.last_tension = None
             self.release()
             return
+
+        tension_status = self._reel_limit(observation, now)
+        self.reel_guard = bool(tension_status)
+        if self.reel_guard:
+            # Send the lift before another steering gesture when near red.
+            if 0 in self.held:
+                self.reel_ready_at = max(self.reel_ready_at, now + 0.10)
+            self.release(0)
+
         direction = observation.steer
         self.steer_streak = self.steer_streak + 1 if direction == self.last_steer else 1
         self.last_steer = direction
@@ -404,23 +441,49 @@ class FishingStrategy:
         elif not direction or 1 in self.held:
             self.release(1)
 
-        angle, limit = observation.tension, observation.green_limit
-        margin = 16 if 0 in self.held else 30
-        if observation.full_green:
-            self.wait_for_green = False
-        if self.wait_for_green:
-            self.release(0)
+        if self.reel_guard:
+            self.status = tension_status
+        else:
+            self._hold(0, ACTION)
             if not direction:
-                self.status = "等张力表全绿"
-            return
-        reel = observation.full_green or (angle is not None and limit is not None and angle > limit + margin)
-        if observation.release_reel or not reel:
-            self.release(0)
-            if observation.release_reel:
-                self.status = "张力过高，已松手"
-            return
-        self._hold(0, ACTION)
-        if observation.full_green:
-            self.status = "全绿，持续收线"
-        elif not direction:
-            self.status = "调节张力并收线"
+                self.status = "控制张力并收线"
+
+    def _reel_limit(self, observation, now):
+        angle, low, high = observation.tension, observation.green_limit, observation.green_upper
+        pressure = observation.fish_pressure
+        previous = self.last_tension
+        self.last_tension = (angle, pressure, now) if angle is not None else None
+        if observation.release_reel:
+            return "张力过高，已松手"
+        if angle is None or low is None or high is None:
+            return "等待张力指针"
+        if now < self.reel_ready_at:
+            return "张力回落，暂缓收线"
+
+        toward_red = 0.0
+        rising_pressure = False
+        if previous is not None:
+            previous_angle, previous_pressure, timestamp = previous
+            dt = now - timestamp
+            if 0.020 <= dt <= 0.24:
+                toward_red = max(0.0, (previous_angle - angle) / dt)
+                if pressure is not None and previous_pressure is not None:
+                    change = pressure - previous_pressure
+                    rising_pressure = change >= 5 and change / dt >= 45
+
+        pressure_high = pressure is not None and pressure >= 119
+        if pressure is not None and pressure >= 142 and rising_pressure:
+            return "外圈红条快速增长，已松手"
+        caution = pressure_high or rising_pressure
+        red_edge = max(low, observation.red_limit or 0.0)
+        # Angles decrease clockwise toward high tension. Aim for the middle
+        # of green, with headroom for a delayed release and a separate restart
+        # threshold to allow the needle to move safely back toward grey.
+        stop_at = max(red_edge + (23 if caution else 16), (low + high) * 0.5 - 11)
+        predicted = angle - min(38, toward_red * (0.16 if caution else 0.12))
+        if predicted <= red_edge + (19 if caution else 12):
+            return "接近红区，已松手"
+        threshold = stop_at if 0 in self.held else stop_at + 11
+        if predicted <= threshold:
+            return "稳定张力，暂松手"
+        return ""

@@ -12,6 +12,7 @@ extern "C"
 #include "libavformat/avformat.h"
 }
 
+class RecordingTimeline;
 class Recorder : public QThread
 {
     Q_OBJECT
@@ -27,15 +28,22 @@ public:
     virtual ~Recorder();
 
     void setFrameSize(const QSize &declaredFrameSize);
+    const QString &fileName() const { return m_fileName; }
     void setFormat(Recorder::RecorderFormat format);
     bool open();
-    void close();
-    bool write(AVPacket *packet);
+    bool close();
+    void setTimeline(RecordingTimeline *timeline) { m_timeline = timeline; }
     bool startRecorder();
     void stopRecorder();
-    bool push(const AVPacket *packet);
+    bool push(const AVPacket *packet, qint64 arrivalUs = 0);
 
 private:
+    struct QueuedPacket {
+        AVPacket *packet;
+        qint64 arrivalUs;
+        qint64 frameIndex;
+    };
+    bool write(const QueuedPacket &item);
     const AVOutputFormat *findMuxer(const char *name);
     bool recorderWriteHeader(const AVPacket *packet);
     void recorderRescalePacket(AVPacket *packet);
@@ -60,12 +68,9 @@ private:
     QWaitCondition m_recvDataCond;
     bool m_stopped = false; // set on recorder_stop() by the stream reader
     bool m_failed = false;  // set on packet write failure
-    QQueue<AVPacket *> m_queue;
-    // we can write a packet only once we received the next one so that we can
-    // set its duration (next_pts - current_pts)
-    // "previous" is only accessed from the recorder thread, so it does not
-    // need to be protected by the mutex
-    AVPacket *m_previous = Q_NULLPTR;
+    QQueue<QueuedPacket> m_queue;
+    RecordingTimeline *m_timeline = nullptr;
+    qint64 m_ptsOrigin = AV_NOPTS_VALUE;
 };
 
 #endif // RECORDER_H

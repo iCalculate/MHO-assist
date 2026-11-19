@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <QObject>
+#include <QPair>
 #include <QMap>
 #include <QPointer>
 #include <QRect>
@@ -72,6 +73,8 @@ public:
     // user data:common
     void setUserBootConfig(const UserBootConfig &config);
     UserBootConfig getUserBootConfig();
+    QPair<int, int> diagnosticChartSettings() const;
+    void setDiagnosticChartSettings(int sampleIntervalMs, int windowSeconds);
     void setTrayMessageShown(bool shown);
     bool getTrayMessageShown();
 

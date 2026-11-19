@@ -4,6 +4,7 @@
 #include <QCursor>
 #include <QGuiApplication>
 #include <QTimer>
+#include <QWheelEvent>
 #include <QTime>
 #include <QRandomGenerator>
 #include <QKeySequence>
@@ -20,6 +21,19 @@
 #include "controller.h"
 
 #define CURSOR_POS_CHECK 50
+
+namespace {
+constexpr int PinchTopTouch = -1;
+constexpr int PinchBottomTouch = -2;
+constexpr int WheelUnitsPerStep = 120;
+constexpr int PinchAnimationSteps = 12;
+constexpr int PinchStepIntervalMs = 8;
+constexpr double PinchInnerRadius = 0.14;
+constexpr double PinchOuterRadius = 0.22;
+constexpr double PinchMinOuterRadius = 0.075;
+constexpr double PinchInnerRatio = PinchInnerRadius / PinchOuterRadius;
+constexpr int MaxPendingPinches = 4;
+}
 
 static QPointF mouseEventPosition(const QMouseEvent *event)
 {
@@ -49,6 +63,7 @@ InputConvertGame::InputConvertGame(Controller *controller) : InputConvertNormal(
     connect(controller, &Controller::deviceTouchCancelFinished, this, [this](bool ok) {
         m_deviceCancelOk = ok;
         if (!ok) {
+            cancelWheelPinch();
             m_gameMap = false;
             m_needBackMouseMove = false;
             hideMouseCursor(false);
@@ -97,6 +112,7 @@ void InputConvertGame::releaseAllTouches()
     m_dragDelayData.queueTimer.clear();
     m_dragDelayData.pressKey = 0;
     endMouseDrag(false);
+    cancelWheelPinch();
     for (int id = 0; id < MULTI_TOUCH_MAX_NUM; ++id) {
         if (m_touchActive[id]) {
             sendTouchUpEvent(id, m_touchPositions[id]);
@@ -115,7 +131,8 @@ void InputConvertGame::releaseAllTouches()
 bool InputConvertGame::eventFilter(QObject *watched, QEvent *event)
 {
     QWidget *window = qobject_cast<QWidget *>(watched);
-    if (window && window->isWindow() && event->type() == QEvent::WindowDeactivate && (m_gameMap || m_normalTouchDown)) {
+    if (window && window->isWindow() && event->type() == QEvent::WindowDeactivate
+        && (m_gameMap || m_normalTouchDown || m_wheelPinch.timer.isActive())) {
         releaseAllTouches();
         m_gameMap = false;
         m_needBackMouseMove = false;
@@ -167,16 +184,132 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
             return;
         }
     }
+    if (from->type() == QEvent::MouseButtonPress || frameSize != m_frameSize) {
+        cancelWheelPinch();
+    }
     InputConvertNormal::mouseEvent(from, frameSize, showSize);
 }
 
 void InputConvertGame::wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize)
 {
-    if (m_gameMap) {
-        updateSize(frameSize, showSize);
-    } else {
-        InputConvertNormal::wheelEvent(from, frameSize, showSize);
+    if (!from || m_gameMap || frameSize.isEmpty() || showSize.isEmpty()) {
+        return;
     }
+
+    const auto mapping = m_keyMap.wheelPinch();
+    qint64 delta = from->angleDelta().y();
+    if (delta == 0 && from->angleDelta().isNull()) {
+        delta = 2 * static_cast<qint64>(from->pixelDelta().y());
+    }
+    if (mapping == KeyMap::WheelPinch::Disabled || delta == 0) {
+        InputConvertNormal::wheelEvent(from, frameSize, showSize);
+        return;
+    }
+    if (m_normalTouchDown) {
+        return;
+    }
+
+    updateSize(frameSize, showSize);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    const QPointF pos = from->position();
+#else
+    const QPointF pos = from->posF();
+#endif
+    const QPointF cursor(pos.x() / showSize.width(), pos.y() / showSize.height());
+    if (mapping == KeyMap::WheelPinch::Inverted) {
+        delta = -delta;
+    }
+    const qint64 accumulated = m_wheelPinch.remainder + delta;
+    m_wheelPinch.remainder = static_cast<int>(accumulated % WheelUnitsPerStep);
+    const qint64 steps = accumulated / WheelUnitsPerStep;
+    const bool expanding = steps > 0;
+    auto &pending = m_wheelPinch.pending;
+    // Keep each detent's original cursor position even when a previous gesture is still running.
+    const int count = static_cast<int>(qMin(qAbs(steps), static_cast<qint64>(MaxPendingPinches - pending.size())));
+    for (int i = 0; i < count; ++i) {
+        pending.enqueue(WheelPinchStep{cursor, expanding});
+    }
+    if (!m_wheelPinch.timer.isActive()) {
+        startWheelPinch();
+    }
+}
+
+void InputConvertGame::startWheelPinch()
+{
+    if (m_wheelPinch.pending.isEmpty()) {
+        return;
+    }
+
+    const WheelPinchStep step = m_wheelPinch.pending.dequeue();
+    const double width = m_frameSize.width();
+    const double height = m_frameSize.height();
+    const double maxY = height - 1.0;
+    const double x = qBound(0.0, width * step.cursor.x(), width - 1.0);
+    const double y = qBound(0.0, height * step.cursor.y(), maxY);
+    const double shortSide = qMin(width, height);
+    const double preferredRadius = PinchOuterRadius * shortSide;
+    const double room = qMin(y, maxY - y);
+    const double minimumRadius = qMin(PinchMinOuterRadius * shortSide, maxY / 2.0);
+    const double radius = qMin(preferredRadius, qMax(minimumRadius, room));
+    if (radius < 2.0) {
+        cancelWheelPinch();
+        return;
+    }
+    // Each scrcpy MOVE updates one finger. Keep both x coordinates fixed so
+    // even the intermediate pointer state cannot displace the midpoint sideways.
+    const double centerY = qBound(radius, y, maxY - radius);
+    m_wheelPinch.center = QPointF(x / width, centerY / height);
+    m_wheelPinch.outerRadius = radius / height;
+
+    const int top = attachTouchID(PinchTopTouch);
+    const int bottom = attachTouchID(PinchBottomTouch);
+    if (top < 0 || bottom < 0) {
+        cancelWheelPinch();
+        return;
+    }
+
+    m_wheelPinch.expanding = step.expanding;
+    m_wheelPinch.animationStep = 0;
+    const QPointF offset(0.0, m_wheelPinch.outerRadius * (step.expanding ? PinchInnerRatio : 1.0));
+    recordInput(m_wheelPinch.expanding ? QStringLiteral("双指放大") : QStringLiteral("双指缩小"));
+    sendTouchDownEvent(top, m_wheelPinch.center - offset);
+    sendTouchDownEvent(bottom, m_wheelPinch.center + offset);
+    m_wheelPinch.timer.start(PinchStepIntervalMs, Qt::PreciseTimer, this);
+}
+
+void InputConvertGame::advanceWheelPinch()
+{
+    if (m_wheelPinch.animationStep == PinchAnimationSteps) {
+        finishWheelPinch();
+        startWheelPinch();
+        return;
+    }
+
+    const double progress = ++m_wheelPinch.animationStep / static_cast<double>(PinchAnimationSteps);
+    const double spread = m_wheelPinch.expanding ? progress : 1.0 - progress;
+    const double scale = PinchInnerRatio + spread * (1.0 - PinchInnerRatio);
+    const QPointF offset(0.0, m_wheelPinch.outerRadius * scale);
+    sendTouchMoveEvent(getTouchID(PinchTopTouch), m_wheelPinch.center - offset);
+    sendTouchMoveEvent(getTouchID(PinchBottomTouch), m_wheelPinch.center + offset);
+}
+
+void InputConvertGame::finishWheelPinch()
+{
+    m_wheelPinch.timer.stop();
+    for (const int key : { PinchBottomTouch, PinchTopTouch }) {
+        const int id = getTouchID(key);
+        if (id >= 0) {
+            sendTouchUpEvent(id, m_touchPositions[id]);
+            detachTouchID(key);
+        }
+    }
+}
+
+void InputConvertGame::cancelWheelPinch()
+{
+    finishWheelPinch();
+    m_wheelPinch.pending.clear();
+    m_wheelPinch.remainder = 0;
 }
 
 void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize)
@@ -282,13 +415,24 @@ void InputConvertGame::releaseCustomKeymap()
     if (m_gameMap) switchGameMap();
 }
 
+QPointF InputConvertGame::mappedTapPosition(int key)
+{
+    const auto &node = m_keyMap.getKeyMapNodeKey(key);
+    if (node.type != KeyMap::KMT_CLICK || node.data.click.switchMap) return QPointF(-1, -1);
+    return node.data.click.keyNode.pos;
+}
+
 void InputConvertGame::loadKeyMap(const QString &json)
 {
+    cancelWheelPinch();
     m_keyMap.loadKeyMap(json);
 }
 
 void InputConvertGame::updateSize(const QSize &frameSize, const QSize &showSize)
 {
+    if (frameSize != m_frameSize) {
+        cancelWheelPinch();
+    }
     if (showSize != m_showSize) {
         const bool draggingWheel = m_mouseDrag.button != Qt::NoButton;
         m_mouseDrag.rebase = draggingWheel;
@@ -1012,6 +1156,10 @@ void InputConvertGame::hideMouseCursor(bool hide)
 
 void InputConvertGame::timerEvent(QTimerEvent *event)
 {
+    if (m_wheelPinch.timer.isActive() && m_wheelPinch.timer.timerId() == event->timerId()) {
+        advanceWheelPinch();
+        return;
+    }
     if (m_ctrlMouseMove.timer == event->timerId()) {
         stopMouseMoveTimer();
         // Don't auto-reset view when smallEyes mode is active
@@ -1024,6 +1172,7 @@ void InputConvertGame::timerEvent(QTimerEvent *event)
 
 QString InputConvertGame::touchOwner(int key) const
 {
+    if (key == PinchTopTouch || key == PinchBottomTouch) { return QStringLiteral("双指缩放"); }
     if (key == Qt::ExtraButton24) { return QStringLiteral("mouse-view"); }
     if (key == Qt::LeftButton) { return QStringLiteral("mouse-left"); }
     if (key == Qt::RightButton) { return QStringLiteral("mouse-right"); }

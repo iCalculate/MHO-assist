@@ -1,7 +1,8 @@
-#ifndef DEVICE_H
+﻿#ifndef DEVICE_H
 #define DEVICE_H
 
 #include <set>
+#include <memory>
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTime>
@@ -12,6 +13,7 @@ class QMouseEvent;
 class QWheelEvent;
 class QKeyEvent;
 class Recorder;
+class RecordingTimeline;
 class Server;
 class VideoBuffer;
 class IDecoder;
@@ -46,6 +48,7 @@ public:
     bool postAssistTouch(int finger, AssistTouchPhase phase, const QPointF &position, const QSize &frameSize) override;
     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void releaseCustomKeymap() override;
+    QPointF mappedTapPosition(int key) const override;
 
     void postGoBack() override;
     void postGoHome() override;
@@ -82,7 +85,10 @@ public:
     bool isCameraMode() const override;
     bool isFlexDisplay() const override;
 
-    void updateScript(QString script) override;
+    void updateScript(QString script, const QString &name) override;
+    void recordingInputFocusLost() override;
+    void recordLocalKeyInput(const QKeyEvent &event) override;
+    void recordMouseInput(const QMouseEvent &event, const QSize &frame, const QSize &view) override;
     bool isCurrentCustomKeymap() override;
     QVariantMap inputDiagnostics() const override;
 
@@ -99,6 +105,7 @@ private:
     QPointer<FileHandler> m_fileHandler;
     QPointer<Demuxer> m_stream;
     QPointer<Recorder> m_recorder;
+    std::unique_ptr<RecordingTimeline> m_recordingTimeline;
 
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;

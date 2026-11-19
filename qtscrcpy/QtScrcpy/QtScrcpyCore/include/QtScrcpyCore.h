@@ -150,9 +150,13 @@ public:
     virtual bool isCameraMode() const { return false; }
     virtual bool isFlexDisplay() const { return false; }
 
-    virtual void updateScript(QString script) = 0;
+    virtual void updateScript(QString script, const QString &name = QString()) = 0;
+    virtual void recordingInputFocusLost() {}
+    virtual void recordLocalKeyInput(const QKeyEvent &) {}
+    virtual void recordMouseInput(const QMouseEvent &, const QSize &, const QSize &) {}
     virtual bool isCurrentCustomKeymap() = 0;
     virtual void releaseCustomKeymap() = 0;
+    virtual QPointF mappedTapPosition(int key) const = 0;
     virtual QVariantMap inputDiagnostics() const { return {}; }
 };
 

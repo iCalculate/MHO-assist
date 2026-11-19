@@ -31,6 +31,7 @@ public:
 
     void SetIcon(QLabel *lab, QChar c, int size = 10);
     void SetIcon(QPushButton *btn, QChar c, int size = 10);
+    QFont font() const { return iconFont; }
 };
 
 #endif // ICONHELPER_H

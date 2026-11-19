@@ -1,5 +1,6 @@
 #include "fishingreport.h"
 
+#include <QAbstractTableModel>
 #include <QApplication>
 #include <QDateTime>
 #include <QDialog>
@@ -18,8 +19,11 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScreen>
+#include <QSet>
+#include <QSortFilterProxyModel>
+#include <QStyleFactory>
+#include <QTableView>
 #include <QThread>
-#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <cstring>
 #include <memory>
@@ -35,10 +39,30 @@
 #endif
 
 namespace {
-QString readCatchName(const QImage &label)
+#if defined(Q_OS_WIN) && defined(_MSC_VER)
+QString readLabel(const QImage &label, const winrt::Windows::Media::Ocr::OcrEngine &engine)
+{
+    if (label.isNull()) return {};
+    using namespace winrt::Windows::Graphics::Imaging;
+    const auto image = label.scaled(label.size() * 3, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                            .convertToFormat(QImage::Format_Grayscale8);
+    const auto size = static_cast<uint32_t>(image.width() * image.height());
+    winrt::Windows::Storage::Streams::Buffer buffer(size);
+    buffer.Length(size);
+    auto *pixels = buffer.data();
+    for (int row = 0; row < image.height(); ++row) {
+        std::memcpy(pixels + row * image.width(), image.constScanLine(row), image.width());
+    }
+    const auto bitmap = SoftwareBitmap::CreateCopyFromBuffer(
+        buffer, BitmapPixelFormat::Gray8, image.width(), image.height(), BitmapAlphaMode::Ignore);
+    const auto text = engine.RecognizeAsync(bitmap).get().Text();
+    return QString::fromWCharArray(text.c_str(), static_cast<int>(text.size()));
+}
+#endif
+
+void recognizeCatch(FishingCatch &fish)
 {
 #if defined(Q_OS_WIN) && defined(_MSC_VER)
-    using namespace winrt::Windows::Graphics::Imaging;
     using namespace winrt::Windows::Media::Ocr;
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -46,37 +70,58 @@ QString readCatchName(const QImage &label)
             ~Apartment() { winrt::uninit_apartment(); }
         } apartment;
         const auto engine = OcrEngine::TryCreateFromLanguage(winrt::Windows::Globalization::Language(L"zh-Hans-CN"));
-        if (!engine) return {};
-        const QImage image = label.scaled(label.size() * 3, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                 .convertToFormat(QImage::Format_Grayscale8);
-        const auto size = static_cast<uint32_t>(image.width() * image.height());
-        winrt::Windows::Storage::Streams::Buffer buffer(size);
-        buffer.Length(size);
-        auto *pixels = buffer.data();
-        for (int row = 0; row < image.height(); ++row) {
-            std::memcpy(pixels + row * image.width(), image.constScanLine(row), image.width());
+        if (!engine) return;
+        if (!fish.nameImage.isNull()) {
+            static const QRegularExpression nonHan(QStringLiteral("[^\\p{Han}]"));
+            static const QRegularExpression rarity(QStringLiteral("^(普通|[优優]良|精良|稀有|卓越|史[诗詩]|[传傳][说說]|神[话話])"));
+            QString name = readLabel(fish.nameImage, engine).remove(nonHan);
+            const auto rank = rarity.match(name);
+            if (rank.hasMatch()) {
+                if (fish.rarity.isEmpty()) fish.rarity = rank.captured(1);
+                name.remove(0, rank.capturedLength());
+            }
+            if (name.endsWith(QStringLiteral("新"))) name.chop(1);
+            if (fish.name.isEmpty() && name.size() >= 2 && name.size() <= 14) fish.name = name;
         }
-        const auto bitmap = SoftwareBitmap::CreateCopyFromBuffer(
-            buffer, BitmapPixelFormat::Gray8, image.width(), image.height(), BitmapAlphaMode::Ignore);
-        const auto text = engine.RecognizeAsync(bitmap).get().Text();
-        QString name = QString::fromWCharArray(text.c_str(), static_cast<int>(text.size()));
-        name.remove(QRegularExpression(QStringLiteral("[^\\p{Han}]")));
-        name.remove(QRegularExpression(QStringLiteral("^(普通|优良|精良|稀有|卓越|史诗|传说|神话)")));
-        if (name.endsWith(QStringLiteral("新"))) name.chop(1);
-        return name.size() >= 2 && name.size() <= 14 ? name : QString();
+        if (!fish.sizeImage.isNull()) {
+            static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+            static const QRegularExpression crown(QStringLiteral("金冠|[银銀]冠"));
+            static const QRegularExpression giant(QStringLiteral("^巨型[种種]$"));
+            static const QRegularExpression length(QStringLiteral("^[0-9]{1,6}(?:[.,][0-9]{1,3})?(?:cm|厘米|m|米)?$"));
+            QString size = readLabel(fish.sizeImage, engine).normalized(QString::NormalizationForm_KC).remove(whitespace);
+            const auto badge = crown.match(size);
+            if (badge.hasMatch() && fish.crown.isEmpty()) {
+                fish.crown = badge.captured() == QStringLiteral("金冠") ? QStringLiteral("金冠") : QStringLiteral("银冠");
+            }
+            size.remove(crown);
+            if (fish.size.isEmpty()) {
+                if (giant.match(size).hasMatch()) fish.size = QStringLiteral("巨型种");
+                else if (length.match(size).hasMatch()) fish.size = size;
+            }
+        }
     } catch (const winrt::hresult_error &) {
-        return {};
+        // The catch and any recognized fields have already been saved.
     }
 #else
-    Q_UNUSED(label)
-    return {};
+    Q_UNUSED(fish)
 #endif
 }
 
-class FishingHistory final : public QObject {
+enum CatchColumn { Name, Rarity, Size, Crown, Time, ColumnCount };
+
+void updateCatch(QJsonObject &entry, const FishingCatch &fish)
+{
+    entry.insert(QStringLiteral("name"), fish.name);
+    entry.insert(QStringLiteral("rarity"), fish.rarity);
+    entry.insert(QStringLiteral("size"), fish.size);
+    entry.insert(QStringLiteral("crown"), fish.crown);
+}
+
+class FishingHistory final : public QAbstractTableModel {
 public:
     FishingHistory()
-        : QObject(qApp), m_path(QDir(Config::getInstance().getConfigDirectory()).filePath(QStringLiteral("fishing-history.json")))
+        : QAbstractTableModel(qApp),
+          m_path(QDir(Config::getInstance().getConfigDirectory()).filePath(QStringLiteral("fishing-history.json")))
     {
         QFile file(m_path);
         if (!file.exists()) return;
@@ -90,38 +135,90 @@ public:
         m_canWrite = m_saved = false;
     }
 
-    void record(const QString &session, const QString &name, const QImage &label)
+    int rowCount(const QModelIndex &parent = {}) const override { return parent.isValid() ? 0 : m_rows.size(); }
+    int columnCount(const QModelIndex &parent = {}) const override { return parent.isValid() ? 0 : ColumnCount; }
+
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override
     {
-        const int index = m_rows.size();
-        m_rows.append(QJsonObject{
+        static const QString titles[] = {QStringLiteral("鱼名"), QStringLiteral("等级"), QStringLiteral("体型"),
+                                         QStringLiteral("皇冠"), QStringLiteral("捕获时间")};
+        if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < ColumnCount) {
+            return titles[section];
+        }
+        return {};
+    }
+
+    QVariant data(const QModelIndex &index, int role) const override
+    {
+        if (!checkIndex(index, CheckIndexOption::IndexIsValid)) return {};
+        static const QString keys[] = {QStringLiteral("name"), QStringLiteral("rarity"), QStringLiteral("size"),
+                                       QStringLiteral("crown"), QStringLiteral("caughtAt")};
+        const auto position = m_rows.size() - 1 - index.row();
+        const auto entry = m_rows.at(position).toObject();
+        const auto column = index.column();
+        if (role == Qt::UserRole) return entry.value(QStringLiteral("session")).toString();
+        if (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != Qt::ForegroundRole) return {};
+        QString text = entry.value(keys[column]).toString();
+        if (role == Qt::ForegroundRole) {
+            if (text.isEmpty() || column == Time) return QColor(QStringLiteral("#9db0bc"));
+            if (column == Crown) {
+                if (text == QStringLiteral("金冠")) return QColor(QStringLiteral("#f6cd77"));
+                if (text == QStringLiteral("银冠")) return QColor(QStringLiteral("#d4e4f4"));
+            }
+            if (column == Rarity) {
+                if (text == QStringLiteral("精良")) return QColor(QStringLiteral("#a2d8b4"));
+                if (text == QStringLiteral("稀有")) return QColor(QStringLiteral("#a7d1ff"));
+                if (text == QStringLiteral("卓越")) return QColor(QStringLiteral("#d6b8ff"));
+            }
+            return {};
+        }
+        if (column == Time) {
+            text = QDateTime::fromString(text, Qt::ISODateWithMs).toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        }
+        if (!text.isEmpty()) return text;
+        if (m_reading.contains(position)) return QStringLiteral("识别中");
+        if (role == Qt::ToolTipRole) {
+            return entry.contains(keys[column]) ? QStringLiteral("此项未识别") : QStringLiteral("此项未记录");
+        }
+        return entry.contains(keys[column]) ? QStringLiteral("未识别") : QStringLiteral("—");
+    }
+
+    void record(const QString &session, const FishingCatch &fish, CatchRecognized recognized)
+    {
+        const int position = m_rows.size();
+        QJsonObject entry{
             {QStringLiteral("session"), session},
             {QStringLiteral("caughtAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
-            {QStringLiteral("name"), name},
-        });
+        };
+        updateCatch(entry, fish);
+        const bool needsOcr = !fish.nameImage.isNull() || !fish.sizeImage.isNull();
+        if (needsOcr) m_reading.insert(position);
+        beginInsertRows({}, 0, 0);
+        m_rows.append(entry);
         save();
-        if (!name.isEmpty() || label.isNull()) return;
+        endInsertRows();
+        if (!needsOcr) {
+            if (recognized) recognized(fish);
+            return;
+        }
 
-        auto result = std::make_shared<QString>();
-        auto *reader = QThread::create([label, result] { *result = readCatchName(label); });
-        connect(reader, &QThread::finished, this, [this, result, index] {
-            if (result->isEmpty()) return;
-            auto row = m_rows.at(index).toObject();
-            row.insert(QStringLiteral("name"), *result);
-            m_rows.replace(index, row);
-            save();
+        auto result = std::make_shared<FishingCatch>(fish);
+        auto *reader = QThread::create([result] { recognizeCatch(*result); });
+        connect(reader, &QThread::finished, this, [this, result, position, recognized] {
+            auto entry = m_rows.at(position).toObject();
+            const auto previous = entry;
+            updateCatch(entry, *result);
+            if (entry != previous) {
+                m_rows.replace(position, entry);
+                save();
+            }
+            m_reading.remove(position);
+            const auto row = m_rows.size() - 1 - position;
+            emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
+            if (recognized) recognized(*result);
         });
         connect(reader, &QThread::finished, reader, &QObject::deleteLater);
         reader->start();
-    }
-
-    QJsonArray entries(const QString &session) const
-    {
-        if (session.isEmpty()) return m_rows;
-        QJsonArray rows;
-        for (const auto &entry : m_rows) {
-            if (entry.toObject().value(QStringLiteral("session")).toString() == session) rows.append(entry);
-        }
-        return rows;
     }
 
     bool saved() const { return m_saved; }
@@ -137,6 +234,7 @@ private:
 
     QString m_path;
     QJsonArray m_rows;
+    QSet<int> m_reading;
     bool m_canWrite = true;
     bool m_saved = true;
 };
@@ -147,40 +245,59 @@ FishingHistory &history()
     return *journal;
 }
 
-void showReport(QWidget *anchor, const QString &session, int caught)
+void showReport(QWidget *anchor, const QString &session, int caught, bool completed)
 {
     const bool summary = !session.isEmpty();
-    const auto rows = history().entries(session);
-    const QString title = summary ? QStringLiteral("钓鱼完成") : QStringLiteral("渔获记录");
+    const QString title = !summary ? QStringLiteral("渔获记录")
+                                   : completed ? QStringLiteral("钓鱼完成") : QStringLiteral("钓鱼已结束");
+    const auto *screen = anchor ? anchor->screen() : nullptr;
+    if (!screen) screen = QApplication::primaryScreen();
+    const QRect area = (screen ? screen->availableGeometry() : QRect(0, 0, 1024, 768)).adjusted(12, 12, -12, -12);
+    const int width = qMin(768, area.width());
+    constexpr int outerMargin = 10;
+    constexpr int cardPadding = 22;
+    constexpr int headerHeight = 35;
+    constexpr int rowHeight = 38;
+    const int maxRows = qBound(1, (area.height() - 200) / rowHeight, summary ? 7 : 12);
     auto *window = new QDialog(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     window->setWindowTitle(title);
     window->setAttribute(Qt::WA_TranslucentBackground);
     window->setAttribute(Qt::WA_ShowWithoutActivating, summary);
     window->setAttribute(Qt::WA_DeleteOnClose);
-    window->setFixedWidth(summary ? 416 : 466);
+    window->setFixedWidth(width);
     window->setFont(QFont(QStringLiteral("Microsoft YaHei UI")));
     window->setStyleSheet(QStringLiteral(R"(
-        QFrame#catchCard { background: #111c28; border: 1px solid #364b5b; border-radius: 15px; }
-        QLabel { color: #eaf4f8; background: transparent; border: none; font-size: 14px; }
-        QLabel#catchStatus { background: #193b36; border-radius: 18px; }
-        QLabel#catchTitle { font-size: 19px; font-weight: 600; }
-        QLabel#catchTotal, QLabel#catchMuted { color: #afc2d0; font-size: 13px; }
-        QTreeWidget { background: #152330; color: #e0edf3; border: 1px solid #2e4151; border-radius: 8px;
-                      outline: 0; alternate-background-color: #182733; font-size: 14px; }
-        QTreeWidget::item { height: 34px; padding-left: 9px; padding-right: 9px; border: 0; }
-        QScrollBar:vertical { background: transparent; width: 7px; margin: 3px 1px 3px 0; }
-        QScrollBar::handle:vertical { background: #526d7d; border-radius: 3px; min-height: 24px; }
+        QFrame#catchCard { background: #15212b; border: 1px solid #334653; border-radius: 16px; }
+        QLabel { color: #edf5f7; background: transparent; border: none; font-size: 14px; }
+        QLabel#catchStatus { background: #203e39; border: 1px solid #31544b; border-radius: 13px; }
+        QLabel#catchTitle { font-size: 22px; font-weight: 600; }
+        QLabel#catchTotal { color: #a9bdc9; font-size: 13px; }
+        QLabel#catchEmpty { color: #b7c8d2; background: #192731; border: 1px solid #30434f; border-radius: 8px; }
+        QLabel#catchWarning { color: #f0cc83; font-size: 13px; }
+        QTableView { background: #1b2933; alternate-background-color: #1d2c37; color: #e8f0f4;
+                     border: 1px solid #314451; outline: 0; font-size: 14px; }
+        QHeaderView { background: #223440; }
+        QHeaderView::section { background: #223440; color: #aebfca; font-size: 13px; font-weight: 600;
+                               border: 0; border-bottom: 1px solid #344956; padding: 0 4px; }
+        QScrollBar:vertical { background: #14202a; width: 13px; margin: 0; }
+        QScrollBar:horizontal { background: #14202a; height: 13px; margin: 0; }
+        QScrollBar::handle { background: #597585; border: 2px solid #14202a; border-radius: 6px; }
+        QScrollBar::handle:hover { background: #7695a5; }
+        QScrollBar::handle:vertical { min-height: 32px; }
+        QScrollBar::handle:horizontal { min-width: 32px; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-        QPushButton { color: #9be5cd; background: transparent; border: 1px solid #365364;
-                      border-radius: 7px; padding: 6px 12px; font-size: 13px; }
-        QPushButton:hover, QPushButton:focus { background: #223c47; border-color: #72c2ab; }
-        QPushButton#closeCatchReport { font-size: 21px; padding: 0; border-color: transparent; color: #b4c7d3; }
-        QPushButton#closeCatchReport:hover { background: #293c4b; color: #ffffff; }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+        QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+        QPushButton { color: #c9f3e4; background: #24463e; border: 1px solid #385e53;
+                      border-radius: 8px; padding: 7px 13px; font-size: 13px; }
+        QPushButton:hover, QPushButton:focus { background: #2d574c; border-color: #6a9f8f; }
+        QPushButton#closeCatchReport { font-size: 22px; padding: 0; background: transparent;
+                                      border-color: transparent; color: #a9beca; }
+        QPushButton#closeCatchReport:hover, QPushButton#closeCatchReport:focus { background: #293c49; color: #ffffff; }
     )"));
 
     auto *outer = new QVBoxLayout(window);
-    outer->setContentsMargins(13, 13, 13, 15);
+    outer->setContentsMargins(outerMargin, outerMargin, outerMargin, outerMargin + 3);
     auto *card = new QFrame(window);
     card->setObjectName(QStringLiteral("catchCard"));
     auto *shadow = new QGraphicsDropShadowEffect(card);
@@ -190,16 +307,16 @@ void showReport(QWidget *anchor, const QString &session, int caught)
     card->setGraphicsEffect(shadow);
     outer->addWidget(card);
     auto *layout = new QVBoxLayout(card);
-    layout->setContentsMargins(17, 16, 17, 15);
-    layout->setSpacing(13);
+    layout->setContentsMargins(cardPadding, 18, cardPadding, 17);
+    layout->setSpacing(15);
 
     auto *header = new QHBoxLayout;
-    header->setSpacing(11);
+    header->setSpacing(13);
     if (summary) {
         auto *check = new QLabel(card);
         check->setObjectName(QStringLiteral("catchStatus"));
         check->setAlignment(Qt::AlignCenter);
-        check->setFixedSize(36, 36);
+        check->setFixedSize(46, 46);
         QPixmap mark(24, 24);
         mark.fill(Qt::transparent);
         QPainter painter(&mark);
@@ -216,8 +333,7 @@ void showReport(QWidget *anchor, const QString &session, int caught)
     auto *headingText = new QLabel(title, card);
     headingText->setObjectName(QStringLiteral("catchTitle"));
     heading->addWidget(headingText);
-    auto *total = new QLabel(summary ? QStringLiteral("本轮钓获 %1 条").arg(caught)
-                                     : QStringLiteral("累计记录 %1 条").arg(rows.size()), card);
+    auto *total = new QLabel(card);
     total->setObjectName(QStringLiteral("catchTotal"));
     heading->addWidget(total);
     header->addLayout(heading, 1);
@@ -225,49 +341,59 @@ void showReport(QWidget *anchor, const QString &session, int caught)
     close->setObjectName(QStringLiteral("closeCatchReport"));
     close->setAccessibleName(QStringLiteral("关闭"));
     close->setToolTip(QStringLiteral("关闭"));
-    close->setFixedSize(30, 30);
+    close->setFixedSize(31, 31);
     close->setAutoDefault(false);
     QObject::connect(close, &QPushButton::clicked, window, &QDialog::close);
     header->addWidget(close, 0, Qt::AlignTop);
     layout->addLayout(header);
 
-    if (rows.isEmpty()) {
-        auto *empty = new QLabel(summary ? QStringLiteral("本轮暂无渔获") : QStringLiteral("暂无渔获记录"), card);
-        empty->setObjectName(QStringLiteral("catchMuted"));
-        layout->addWidget(empty);
-    } else {
-        auto *fish = new QTreeWidget(card);
-        fish->setAccessibleName(QStringLiteral("鱼名和捕获时间"));
-        fish->setHeaderLabels({QStringLiteral("鱼名"), QStringLiteral("捕获时间")});
-        fish->setHeaderHidden(true);
-        fish->setRootIsDecorated(false);
-        fish->setItemsExpandable(false);
-        fish->setIndentation(0);
-        fish->setUniformRowHeights(true);
-        fish->setSelectionMode(QAbstractItemView::NoSelection);
-        fish->setAlternatingRowColors(true);
-        fish->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        fish->header()->setStretchLastSection(false);
-        fish->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-        fish->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-        for (int index = rows.size() - 1; index >= 0; --index) {
-            const auto entry = rows.at(index).toObject();
-            const QString name = entry.value(QStringLiteral("name")).toString();
-            const auto caughtAt = QDateTime::fromString(entry.value(QStringLiteral("caughtAt")).toString(), Qt::ISODateWithMs).toLocalTime();
-            const auto time = caughtAt.toString(summary ? QStringLiteral("HH:mm:ss") : QStringLiteral("yyyy-MM-dd HH:mm"));
-            auto *row = new QTreeWidgetItem(fish, {name.isEmpty() ? QStringLiteral("鱼名未识别") : name, time});
-            row->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-            row->setForeground(1, QColor(QStringLiteral("#a3bac8")));
-        }
-        fish->setFixedHeight(34 * qMin(rows.size(), summary ? 5 : 10) + 2);
-        layout->addWidget(fish);
+    auto *table = new QTableView(card);
+    table->setAccessibleName(QStringLiteral("渔获记录"));
+    if (auto *style = QStyleFactory::create(QStringLiteral("Fusion"))) {
+        style->setParent(table);
+        table->setStyle(style);
     }
+    auto *entries = new QSortFilterProxyModel(table);
+    entries->setSourceModel(&history());
+    if (summary) {
+        entries->setFilterRole(Qt::UserRole);
+        entries->setFilterRegularExpression(QRegularExpression::anchoredPattern(QRegularExpression::escape(session)));
+    }
+    table->setModel(entries);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setFocusPolicy(Qt::NoFocus);
+    table->setAlternatingRowColors(true);
+    table->setShowGrid(false);
+    table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    table->verticalHeader()->hide();
+    table->verticalHeader()->setMinimumSectionSize(rowHeight);
+    table->verticalHeader()->setDefaultSectionSize(rowHeight);
+    table->horizontalHeader()->setFixedHeight(headerHeight);
+    table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    table->horizontalHeader()->setSectionsClickable(false);
+    table->ensurePolished();
+    const int bar = table->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, table);
+    const int usableWidth = width - 2 * (outerMargin + cardPadding) - 4 - bar;
+    const int timeWidth = qMax(174, table->fontMetrics().horizontalAdvance(QStringLiteral("2026-11-19 00:00:00")) + 24);
+    const int otherWidth = 90 + 104 + 90 + timeWidth;
+    table->setColumnWidth(Name, qMax(220, usableWidth - otherWidth));
+    table->setColumnWidth(Rarity, 90);
+    table->setColumnWidth(Size, 104);
+    table->setColumnWidth(Crown, 90);
+    table->setColumnWidth(Time, timeWidth);
+    layout->addWidget(table);
 
-    if (!history().saved()) {
-        auto *warning = new QLabel(QStringLiteral("本地记录保存失败"), card);
-        warning->setObjectName(QStringLiteral("catchMuted"));
-        layout->addWidget(warning);
-    }
+    auto *empty = new QLabel(summary ? QStringLiteral("本轮暂无渔获") : QStringLiteral("暂无渔获记录"), card);
+    empty->setObjectName(QStringLiteral("catchEmpty"));
+    empty->setAlignment(Qt::AlignCenter);
+    empty->setFixedHeight(69);
+    layout->addWidget(empty);
+
+    auto *warning = new QLabel(QStringLiteral("本地记录保存失败"), card);
+    warning->setObjectName(QStringLiteral("catchWarning"));
+    layout->addWidget(warning);
     if (summary) {
         auto *open = new QPushButton(QStringLiteral("查看历史"), card);
         open->setAutoDefault(false);
@@ -278,27 +404,38 @@ void showReport(QWidget *anchor, const QString &session, int caught)
         layout->addWidget(open, 0, Qt::AlignRight);
     }
 
-    window->adjustSize();
-    const auto *screen = anchor ? anchor->screen() : QApplication::primaryScreen();
-    if (screen) {
-        const QRect area = screen->availableGeometry().adjusted(8, 8, -8, -8);
-        window->move(area.right() - window->width(), area.bottom() - window->height());
-    }
+    const auto fitRows = [=] {
+        const int count = entries->rowCount();
+        const int visibleRows = qMin(count, maxRows);
+        total->setText(summary ? QStringLiteral("本次渔获 %1 条").arg(caught)
+                               : QStringLiteral("累计渔获 %1 条").arg(count));
+        const int viewWidth = usableWidth + (count <= maxRows ? bar : 0);
+        const int horizontalBar = table->horizontalHeader()->length() > viewWidth ? bar : 0;
+        table->setFixedHeight(headerHeight + rowHeight * visibleRows + 2 + horizontalBar);
+        table->setVisible(count != 0);
+        empty->setVisible(count == 0);
+        warning->setVisible(!history().saved());
+        window->adjustSize();
+        window->move(area.right() + 1 - window->width(), area.bottom() + 1 - window->height());
+    };
+    QObject::connect(entries, &QAbstractItemModel::rowsInserted, window, fitRows);
+    QObject::connect(&history(), &QAbstractItemModel::dataChanged, window, [warning] { warning->setVisible(!history().saved()); });
+    fitRows();
     window->show();
 }
 }
 
-void recordFishingCatch(const QString &session, const QString &name, const QImage &label)
+void recordFishingCatch(const QString &session, const FishingCatch &fish, CatchRecognized recognized)
 {
-    history().record(session, name, label);
+    history().record(session, fish, recognized);
 }
 
-void showFishingSummary(QWidget *anchor, const QString &session, int caught)
+void showFishingSummary(QWidget *anchor, const QString &session, int caught, bool completed)
 {
-    showReport(anchor, session, caught);
+    showReport(anchor, session, caught, completed);
 }
 
 void showFishingHistory(QWidget *anchor)
 {
-    showReport(anchor, {}, 0);
+    showReport(anchor, {}, 0, false);
 }

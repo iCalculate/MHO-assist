@@ -17,6 +17,8 @@
 #include <QRandomGenerator>
 #include <functional>
 
+#include "directionround.h"
+
 class DirectionRegion final : public QWidget {
 public:
     QRectF region{283.0/1080,377.0/484,493.0/1080,54.0/484};
@@ -73,32 +75,49 @@ private:
     bool drag=false;int mode=0;QPointF start;QRectF original;
 };
 
-// Recognition runs off the UI thread, with a single outstanding bounded crop.
-// Only the owning window can issue mapped input; no desktop keyboard injection.
+// Read decoded video directly and send touches to this session's Android device.
 class DirectionAssistant final : public QObject {
 public:
     DirectionRegion *overlay;
     std::function<bool()> canSend;
-    std::function<void(int,bool)> sendKey;
-    std::function<void(bool)> setMapping;
+    std::function<QPointF(int)> directionPosition;
+    std::function<bool(const QPointF &, const QSize &, bool)> sendTouch;
     std::function<void(QString)> showStatus;
-    bool enabled=false,editing=false;
-    explicit DirectionAssistant(QWidget *video,QObject *owner):QObject(owner),overlay(new DirectionRegion(video)){
-        elapsed.start();process.setProcessChannelMode(QProcess::SeparateChannels);
-        QObject::connect(&process,&QProcess::readyReadStandardOutput,this,[this]{readReply();});
-        QObject::connect(&process,&QProcess::readyReadStandardError,this,[this]{process.readAllStandardError();});
-        QObject::connect(&process,&QProcess::errorOccurred,this,[this](QProcess::ProcessError){ready=false;busy=false;abortInput();status(QStringLiteral("识别模块启动失败"));});
-        QObject::connect(&process,static_cast<void(QProcess::*)(int,QProcess::ExitStatus)>(&QProcess::finished),this,[this](int,QProcess::ExitStatus){ready=false;busy=false;abortInput();if(enabled)status(QStringLiteral("识别模块已停止，请重新开启"));});
-        inputTimer.setSingleShot(true);QObject::connect(&inputTimer,&QTimer::timeout,this,[this]{inputStep();});
-        monitor.setInterval(50);QObject::connect(&monitor,&QTimer::timeout,this,[this]{
-            if(!eligible()){abortInput();if(enabled)status(editing?QStringLiteral("调整范围中，输入暂停"):QStringLiteral("等待前台映射模式 · Ctrl"));}
-            else if(ready && sequence.isEmpty() && elapsed.elapsed()-lastFrame>500){status(QStringLiteral("等待投屏画面"));}
-            if(busy && elapsed.elapsed()-requestAt>5000){busy=false;ready=false;process.kill();abortInput();status(QStringLiteral("识别超时，请重新开启"));}
-        });monitor.start();
-        overlay->changed=[this]{manualRegion=true;resetRegionState();save();};
+    std::function<void()> singleRoundFinished;
+    bool enabled = false, editing = false;
+
+    explicit DirectionAssistant(QWidget *video, QObject *owner)
+        : QObject(owner), overlay(new DirectionRegion(video))
+    {
+        elapsed.start();
+        process.setProcessChannelMode(QProcess::SeparateChannels);
+        connect(&process, &QProcess::readyReadStandardOutput, this, [this] { readReply(); });
+        connect(&process, &QProcess::readyReadStandardError, this, [this] { process.readAllStandardError(); });
+        connect(&process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
+            workerStopped(QStringLiteral("识别服务启动失败"));
+        });
+        connect(&process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+                [this](int, QProcess::ExitStatus) { workerStopped(QStringLiteral("识别服务已退出，请重新启用")); });
+        inputTimer.setSingleShot(true);
+        inputTimer.setTimerType(Qt::PreciseTimer);
+        connect(&inputTimer, &QTimer::timeout, this, [this] { inputStep(); });
+        monitor.setInterval(50);
+        connect(&monitor, &QTimer::timeout, this, [this] { checkConnection(); });
+        monitor.start();
+        overlay->changed = [this] { manualRegion = true; resetRegionState(); save(); };
     }
-    ~DirectionAssistant() override {abortInput();process.kill();process.waitForFinished(500);}
-    void setSerial(const QString &value){
+
+    ~DirectionAssistant() override
+    {
+        abortInput();
+        process.disconnect(this);
+        if (process.state() != QProcess::NotRunning) {
+            process.kill();
+            process.waitForFinished(500);
+        }
+    }
+
+    void setSerial(const QString &value) {
         serial=value;QSettings settings(QCoreApplication::applicationDirPath()+"/direction-assist.ini",QSettings::IniFormat);
         QFile legacy(QCoreApplication::applicationDirPath()+"/direction-region-presets.json");
         if(legacy.open(QIODevice::ReadOnly)){
@@ -115,82 +134,315 @@ public:
         if(stored.width()>.02 && stored.height()>.01 && QRectF(0,0,1,1).contains(stored))overlay->region=stored;
         overlay->refresh();
     }
-    void enable(bool value){
-        enabled=value;abortInput();overlay->setVisible(value||editing);overlay->raise();
-        if(!value){status(QStringLiteral("已关闭"));return;}
-        if(!editing && setMapping)setMapping(true);
-        if(process.state()==QProcess::NotRunning){
-            const QString path=QCoreApplication::applicationDirPath()+"/DirectionWorker/DirectionWorker.exe";
-            if(!QFileInfo::exists(path)){status(QStringLiteral("缺少方向识别模块"));return;}
-            ready=false;buffer.clear();process.start(path,QStringList());status(QStringLiteral("正在加载识别"));
-        }else status(QStringLiteral("等待完整方向序列"));
+
+    void enable(bool value)
+    {
+        enabled = value;
+        resetRegionState();
+        flow = DirectionRoundFlow();
+        menu = DirectionMenu::None;
+        lastMenuCheck = -1000;
+        resumeAt = 0;
+        overlay->setVisible(value || editing);
+        overlay->raise();
+        if (!value) {
+            status(QStringLiteral("已停止"));
+            return;
+        }
+        if (process.state() == QProcess::NotRunning) {
+            const QString path = QCoreApplication::applicationDirPath() + "/DirectionWorker/DirectionWorker.exe";
+            if (!QFileInfo::exists(path)) {
+                status(QStringLiteral("未找到方向识别服务"));
+                return;
+            }
+            ready = false;
+            buffer.clear();
+            process.start(path, QStringList());
+            status(QStringLiteral("正在启动识别"));
+        } else {
+            status(waitingStatus());
+        }
     }
-    void edit(bool value){editing=value;abortInput();overlay->setEditing(value);overlay->setVisible(enabled||value);overlay->raise();if(setMapping)setMapping(!value && enabled);if(!value)save();}
-    void resetRegion(){manualRegion=false;located=false;lastLocate=-1500;overlay->region=remembered;overlay->refresh();resetRegionState();save();}
-    void stop(){enable(false);}
-    void abortInput(){inputTimer.stop();if(heldKey && sendKey)sendKey(heldKey,false);heldKey=0;sequence.clear();index=0;}
-    void frame(int w,int h,const uint8_t *y,const uint8_t *u,const uint8_t *v,int sy,int su,int sv){
-        lastFrame=elapsed.elapsed();
-        if(!eligible() || !ready || busy || !sequence.isEmpty() || lastFrame-lastSample<40 || w<2 || h<2)return;
-        if(frameSize!=QSize(w,h)){frameSize=QSize(w,h);located=false;resetRegionState();}
-        lastSample=lastFrame;
-        const bool locating=!manualRegion && !located && lastFrame-lastLocate>=800;
-        if(locating)lastLocate=lastFrame;
-        const int ow=locating?1000:495,oh=locating?qBound(50,qRound(h*1000.0/w),1080):54;
-        QByteArray rgb(ow*oh*3,Qt::Uninitialized);unsigned char *out=reinterpret_cast<unsigned char*>(rgb.data());const QRectF r=locating?QRectF(0,0,1,1):overlay->region;
-        for(int py=0;py<oh;++py){int iy=qBound(0,int((r.y()+(py+.5)*r.height()/oh)*h),h-1);
-            for(int px=0;px<ow;++px){int ix=qBound(0,int((r.x()+(px+.5)*r.width()/ow)*w),w-1);
-                int c=int(y[iy*sy+ix])-16,d=int(u[(iy/2)*su+ix/2])-128,e=int(v[(iy/2)*sv+ix/2])-128;
-                *out++=static_cast<unsigned char>(qBound(0,(298*c+409*e+128)>>8,255));*out++=static_cast<unsigned char>(qBound(0,(298*c-100*d-208*e+128)>>8,255));*out++=static_cast<unsigned char>(qBound(0,(298*c+516*d+128)>>8,255));
+
+    void setContinuous(bool value)
+    {
+        continuous = value;
+        flow.clearObservation();
+        if (enabled && !editing && ready) status(waitingStatus());
+    }
+
+    void edit(bool value)
+    {
+        editing = value;
+        resetRegionState();
+        flow.clearObservation();
+        overlay->setEditing(value);
+        overlay->setVisible(enabled || value);
+        overlay->raise();
+        if (!value) save();
+    }
+
+    void resetRegion()
+    {
+        manualRegion = false;
+        located = false;
+        lastLocate = -1500;
+        overlay->region = remembered;
+        overlay->refresh();
+        resetRegionState();
+        save();
+    }
+
+    void stop() { enable(false); }
+
+    void interrupt()
+    {
+        if (!enabled) return;
+        resumeAt = elapsed.elapsed() + 350;
+        flow.clearObservation();
+        abortInput();
+    }
+
+    void frame(int w, int h, const uint8_t *y, const uint8_t *u, const uint8_t *v, int sy, int su, int sv)
+    {
+        if (w < 2 || h < 2 || !y || !u || !v) return;
+        lastFrame = elapsed.elapsed();
+        if (!eligible() || !ready) return;
+        if (frameSize != QSize(w, h)) {
+            frameSize = QSize(w, h);
+            located = false;
+            flow.clearObservation();
+            resetRegionState();
+        }
+        if (lastFrame - lastMenuCheck >= 170) {
+            lastMenuCheck = lastFrame;
+            handleMenu(DirectionMenuRecognizer::recognize(w, h, y, sy), lastFrame);
+        }
+        if (!enabled || menu != DirectionMenu::None || busy || !sequence.isEmpty() || touchDown || lastFrame - lastSample < 40) return;
+
+        lastSample = lastFrame;
+        const bool locating = !manualRegion && !located && lastFrame - lastLocate >= 800;
+        if (locating) lastLocate = lastFrame;
+        const int ow = locating ? 1000 : 495;
+        const int oh = locating ? qBound(50, qRound(h * 1000.0 / w), 1080) : 54;
+        const QRectF region = locating ? QRectF(0, 0, 1, 1) : overlay->region;
+        QByteArray rgb(ow * oh * 3, Qt::Uninitialized);
+        auto *out = reinterpret_cast<unsigned char *>(rgb.data());
+        for (int py = 0; py < oh; ++py) {
+            const int iy = qBound(0, int((region.y() + (py + .5) * region.height() / oh) * h), h - 1);
+            for (int px = 0; px < ow; ++px) {
+                const int ix = qBound(0, int((region.x() + (px + .5) * region.width() / ow) * w), w - 1);
+                const int c = int(y[iy * sy + ix]) - 16;
+                const int d = int(u[(iy / 2) * su + ix / 2]) - 128;
+                const int e = int(v[(iy / 2) * sv + ix / 2]) - 128;
+                *out++ = static_cast<unsigned char>(qBound(0, (298*c + 409*e + 128) >> 8, 255));
+                *out++ = static_cast<unsigned char>(qBound(0, (298*c - 100*d - 208*e + 128) >> 8, 255));
+                *out++ = static_cast<unsigned char>(qBound(0, (298*c + 516*d + 128) >> 8, 255));
             }
         }
-        QJsonObject object{{"epoch",epoch},{"time",elapsed.elapsed()/1000.0},{"rgb",QString::fromLatin1(rgb.toBase64())},{"locate",locating},{"width",ow},{"height",oh}};
-        write(object);busy=true;requestAt=elapsed.elapsed();
+        write({{"epoch", epoch}, {"time", lastFrame / 1000.0}, {"rgb", QString::fromLatin1(rgb.toBase64())},
+               {"locate", locating}, {"width", ow}, {"height", oh}});
+        busy = true;
+        requestAt = lastFrame;
     }
+
 private:
-    QProcess process;QTimer inputTimer,monitor;QElapsedTimer elapsed;QByteArray buffer;QString serial;
-    bool ready=false,busy=false;int epoch=0,index=0,heldKey=0;QStringList sequence;QSize frameSize;
-    bool manualRegion=false,located=false;QRectF remembered=DirectionRegion::defaultRegion();qint64 lastLocate=-1500;
-    qint64 lastSample=-100,lastFrame=0,requestAt=0;
-    bool eligible()const{return enabled && !editing && canSend && canSend();}
-    void status(const QString &s){if(showStatus)showStatus(s);}
-    void save(){if(serial.isEmpty())return;QSettings settings(QCoreApplication::applicationDirPath()+"/direction-assist.ini",QSettings::IniFormat);settings.setValue(serial+"/region",overlay->region);settings.setValue(serial+"/manual",manualRegion);}
-    void resetRegionState(){++epoch;abortInput();}
-    void write(const QJsonObject &object){process.write(QJsonDocument(object).toJson(QJsonDocument::Compact)+'\n');}
-    void readReply(){
-        buffer+=process.readAllStandardOutput();int newline;
-        while((newline=buffer.indexOf('\n'))>=0){QByteArray line=buffer.left(newline);buffer.remove(0,newline+1);const auto object=QJsonDocument::fromJson(line).object();
-            if(object.value("ready").toBool()){ready=true;if(enabled)status(QStringLiteral("等待完整方向序列"));continue;}
-            busy=false;
-            if(object.contains("error")){status(QStringLiteral("识别异常：")+object.value("error").toString());continue;}
-            if(object.value("locate").toBool()){
-                if(object.value("epoch").toInt()!=epoch || !enabled || editing || manualRegion)continue;
-                const auto a=object.value("region").toArray();
-                if(a.size()==4){QRectF found(a[0].toDouble(),a[1].toDouble(),a[2].toDouble(),a[3].toDouble());
-                    if(found.width()>.05 && found.height()>.015 && QRectF(0,0,1,1).contains(found)){
-                        located=true;
-                        // Do not rearm an already committed sequence after a small region correction.
-                        overlay->region=found;overlay->refresh();save();status(QStringLiteral("已按四方向按钮定位"));
-                    }
-                }
+    struct Direction {
+        QString key;
+        QPointF position;
+    };
+
+    QProcess process;
+    QTimer inputTimer, monitor;
+    QElapsedTimer elapsed;
+    QByteArray buffer;
+    QString serial;
+    DirectionRoundFlow flow;
+    DirectionMenu menu = DirectionMenu::None;
+    bool continuous = false, ready = false, busy = false, touchDown = false;
+    bool manualRegion = false, located = false;
+    int epoch = 0, index = 0;
+    QVector<Direction> sequence;
+    QSize frameSize, touchFrameSize;
+    QPointF touchPosition;
+    QRectF remembered = DirectionRegion::defaultRegion();
+    qint64 lastLocate = -1500, lastSample = -100, lastFrame = -1000, requestAt = 0;
+    qint64 lastMenuCheck = -1000, resumeAt = 0;
+
+    bool eligible() const
+    {
+        return enabled && !editing && elapsed.elapsed() >= resumeAt && canSend && canSend();
+    }
+
+    QString waitingStatus() const
+    {
+        return continuous ? QStringLiteral("连续运行 · 等待斗舞界面") : QStringLiteral("单轮运行 · 等待方向提示");
+    }
+
+    void status(const QString &value) { if (showStatus) showStatus(value); }
+
+    void save()
+    {
+        if (serial.isEmpty()) return;
+        QSettings settings(QCoreApplication::applicationDirPath() + "/direction-assist.ini", QSettings::IniFormat);
+        settings.setValue(serial + "/region", overlay->region);
+        settings.setValue(serial + "/manual", manualRegion);
+    }
+
+    void resetRegionState() { ++epoch; abortInput(); }
+    void write(const QJsonObject &object) { process.write(QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n'); }
+
+    void workerStopped(const QString &message)
+    {
+        ready = busy = false;
+        abortInput();
+        if (enabled) status(message);
+    }
+
+    void checkConnection()
+    {
+        if (enabled && editing) {
+            status(QStringLiteral("正在调整识别区"));
+        } else if (enabled && (!eligible() || elapsed.elapsed() - lastFrame > 500)) {
+            abortInput();
+            flow.clearObservation();
+            if (elapsed.elapsed() - lastFrame > 500) status(QStringLiteral("等待设备画面"));
+        }
+        if (busy && elapsed.elapsed() - requestAt > 5000) {
+            process.kill();
+            workerStopped(QStringLiteral("识别服务超时，请重新启用"));
+        }
+    }
+
+    void handleMenu(const DirectionMenuMatch &match, qint64 now)
+    {
+        if (match.menu != menu && (menu == DirectionMenu::None || match.menu == DirectionMenu::None))
+            resetRegionState();
+        menu = match.menu;
+        if (!flow.observe(match, now)) return;
+        if (!continuous) {
+            if (menu == DirectionMenu::Exit) {
+                stop();
+                if (singleRoundFinished) singleRoundFinished();
+                status(QStringLiteral("单轮完成 · 已停止"));
+            }
+            return;
+        }
+        if (touchDown || !flow.shouldTap(menu, now) || !pressTouch(match.position)) return;
+        flow.clicked(menu, now);
+        inputTimer.start(55);
+        switch (menu) {
+        case DirectionMenu::Match: status(QStringLiteral("连续运行 · 立即匹配")); break;
+        case DirectionMenu::Confirm: status(QStringLiteral("连续运行 · 确认加入匹配")); break;
+        case DirectionMenu::Enter: status(QStringLiteral("连续运行 · 前往斗舞")); break;
+        case DirectionMenu::Exit: status(QStringLiteral("连续运行 · 退出结算")); break;
+        case DirectionMenu::None: break;
+        }
+    }
+
+    bool pressTouch(const QPointF &point)
+    {
+        if (!sendTouch || !QRectF(0, 0, 1, 1).contains(point) || !sendTouch(point, frameSize, true)) return false;
+        touchPosition = point;
+        touchFrameSize = frameSize;
+        touchDown = true;
+        return true;
+    }
+
+    void releaseTouch()
+    {
+        if (touchDown && sendTouch) sendTouch(touchPosition, touchFrameSize, false);
+        touchDown = false;
+    }
+
+    void abortInput()
+    {
+        inputTimer.stop();
+        releaseTouch();
+        sequence.clear();
+        index = 0;
+    }
+
+    void readReply()
+    {
+        buffer += process.readAllStandardOutput();
+        int newline;
+        while ((newline = buffer.indexOf('\n')) >= 0) {
+            const QByteArray line = buffer.left(newline);
+            buffer.remove(0, newline + 1);
+            const auto object = QJsonDocument::fromJson(line).object();
+            if (object.value("ready").toBool()) {
+                ready = true;
+                if (enabled) status(waitingStatus());
                 continue;
             }
-            if(object.value("epoch").toInt()!=epoch || !eligible() || elapsed.elapsed()-requestAt>300 || !sequence.isEmpty())continue;
-            const auto array=object.value("sequence").toArray();
-            if(array.isEmpty()){status(QStringLiteral("识别中 · 等待稳定序列 · %1 ms").arg(object.value("ms").toDouble(),0,'f',1));continue;}
-            for(const auto &value:array){const QString key=value.toString();if(key!="up" && key!="down" && key!="left" && key!="right"){sequence.clear();break;}sequence.append(key);}
-            if(sequence.size()<3 || sequence.size()>9){sequence.clear();continue;}
-            QString arrows;for(const auto &key:sequence)arrows+=key=="up"?QStringLiteral("↑"):key=="down"?QStringLiteral("↓"):key=="left"?QStringLiteral("←"):QStringLiteral("→");
-            status(QStringLiteral("输入 %1 · %2%").arg(arrows).arg(qRound(object.value("confidence").toDouble()*100)));
-            index=0;inputStep();
+            busy = false;
+            if (object.value("epoch").toInt() != epoch || !eligible() || menu != DirectionMenu::None) continue;
+            if (object.contains("error")) {
+                status(QStringLiteral("识别异常 · ") + object.value("error").toString());
+            } else if (object.value("locate").toBool()) {
+                const auto a = object.value("region").toArray();
+                if (!manualRegion && a.size() == 4) {
+                    const QRectF found(a[0].toDouble(), a[1].toDouble(), a[2].toDouble(), a[3].toDouble());
+                    if (found.width() > .05 && found.height() > .015 && QRectF(0, 0, 1, 1).contains(found)) {
+                        located = true;
+                        overlay->region = found;
+                        overlay->refresh();
+                        save();
+                    }
+                }
+            } else if (elapsed.elapsed() - requestAt <= 300 && sequence.isEmpty() && !touchDown) {
+                readSequence(object.value("sequence").toArray());
+            }
         }
     }
-    void inputStep(){
-        if(heldKey){if(sendKey)sendKey(heldKey,false);heldKey=0;if(!eligible()){abortInput();return;}inputTimer.start(20+int(QRandomGenerator::global()->bounded(21)));return;}
-        if(!eligible()){abortInput();return;}
-        if(index>=sequence.size()){sequence.clear();return;}
-        if(index==0){QJsonArray committed;for(const auto &key:sequence)committed.append(key);write(QJsonObject{{"epoch",epoch},{"time",elapsed.elapsed()/1000.0},{"commit",committed}});}
-        const QString key=sequence[index++];heldKey=key=="up"?Qt::Key_Up:key=="down"?Qt::Key_Down:key=="left"?Qt::Key_Left:Qt::Key_Right;
-        if(sendKey)sendKey(heldKey,true);inputTimer.start(26+int(QRandomGenerator::global()->bounded(9)));
+
+    void readSequence(const QJsonArray &array)
+    {
+        if (array.size() < 3 || array.size() > 9) {
+            status(waitingStatus());
+            return;
+        }
+        QString arrows;
+        for (const auto &value : array) {
+            const QString key = value.toString();
+            int qtKey;
+            if (key == "up") { qtKey = Qt::Key_Up; arrows += QChar(0x2191); }
+            else if (key == "down") { qtKey = Qt::Key_Down; arrows += QChar(0x2193); }
+            else if (key == "left") { qtKey = Qt::Key_Left; arrows += QChar(0x2190); }
+            else if (key == "right") { qtKey = Qt::Key_Right; arrows += QChar(0x2192); }
+            else { sequence.clear(); return; }
+            const QPointF position = directionPosition ? directionPosition(qtKey) : QPointF(-1, -1);
+            if (!QRectF(0, 0, 1, 1).contains(position)) {
+                sequence.clear();
+                status(QStringLiteral("请载入含四个方向触控键位的键位配置"));
+                return;
+            }
+            sequence.append({key, position});
+        }
+        status(QStringLiteral("方向 %1").arg(arrows));
+        index = 0;
+        inputStep();
+    }
+
+    void inputStep()
+    {
+        if (touchDown) {
+            releaseTouch();
+            if (!sequence.isEmpty()) inputTimer.start(20 + int(QRandomGenerator::global()->bounded(21)));
+            return;
+        }
+        if (!eligible() || elapsed.elapsed() - lastFrame > 500 || index >= sequence.size()
+            || !pressTouch(sequence[index].position)) {
+            abortInput();
+            return;
+        }
+        if (index == 0) {
+            QJsonArray committed;
+            for (const auto &direction : sequence) committed.append(direction.key);
+            write({{"epoch", epoch}, {"time", elapsed.elapsed() / 1000.0}, {"commit", committed}});
+        }
+        ++index;
+        inputTimer.start(26 + int(QRandomGenerator::global()->bounded(9)));
     }
 };

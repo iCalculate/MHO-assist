@@ -2,6 +2,7 @@
 #ifndef INPUTCONVERTGAME_H
 #define INPUTCONVERTGAME_H
 
+#include <QBasicTimer>
 #include <QPointF>
 #include <QQueue>
 #include <QSet>
@@ -24,6 +25,7 @@ public:
     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize);
     virtual bool isCurrentCustomKeymap();
     void releaseCustomKeymap();
+    QPointF mappedTapPosition(int key);
 
     void loadKeyMap(const QString &json);
     QVariantMap inputDiagnostics() const override;
@@ -68,6 +70,10 @@ protected:
     bool processMouseClick(const QMouseEvent *from);
     bool processMouseMove(const QMouseEvent *from);
     void clearHeldMouseButton(int button);
+    void startWheelPinch();
+    void advanceWheelPinch();
+    void finishWheelPinch();
+    void cancelWheelPinch();
     void startMouseDrag(const KeyMap::MouseDragNode &mapping, const QPointF &cursorPos);
     void moveMouseDrag(const QMouseEvent *from);
     void endMouseDrag(bool select);
@@ -153,6 +159,23 @@ private:
         double radius = 0.0;
         double sensitivity = 1.0;
     } m_mouseDrag;
+
+    struct WheelPinchStep
+    {
+        QPointF cursor;
+        bool expanding;
+    };
+
+    struct
+    {
+        QBasicTimer timer;
+        QQueue<WheelPinchStep> pending;
+        QPointF center;
+        double outerRadius = 0.0;
+        int remainder = 0;
+        int animationStep = 0;
+        bool expanding = false;
+    } m_wheelPinch;
 
     // for drag delay
     struct {

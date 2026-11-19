@@ -418,7 +418,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const mouse=mappings.find(m=>m.type===MAPPING_TYPES.MOUSE_MOVE);
       if(mouse?.smallEyes?.key==='Key_Control') mouse.smallEyes.key='Key_Alt';
       if(mouse && (!mouse.smallEyes || !mouse.smallEyes.enabled)) delete mouse.smallEyes;
-      const config={switchKey:'Key_Control', mouseMoveMap:mouse,keyMapNodes:mappings.filter(m=>m.type!==MAPPING_TYPES.MOUSE_MOVE)};
+      const config = {
+          switchKey: 'Key_Control',
+          mouseMoveMap: mouse,
+          keyMapNodes: mappings.filter(m => m.type !== MAPPING_TYPES.MOUSE_MOVE),
+          wheelPinch: this.wheelPinch
+      };
       try { const r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}); if(!r.ok) throw new Error(await r.text()); alert('已保存到 Generic-Alt。请在 QtScrcpy 中点击刷新脚本并重新应用；必要时停止并重新启动投屏。'); } catch(e){alert('保存失败：'+e.message);}
     };
     document.getElementById('capturePhone').onclick = async function() {

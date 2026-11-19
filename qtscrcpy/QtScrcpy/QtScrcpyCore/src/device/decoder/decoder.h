@@ -21,6 +21,8 @@ public:
 
     bool open() override;
     void close() override;
+    void interrupt();
+    void setPreviewObserver(std::function<void(qint64)> observer) { m_onPreview = observer; }
     bool push(const AVPacket *packet) override;
     FrameCounts frameCounts() const override;
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame) override;
@@ -40,6 +42,7 @@ private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
     bool m_isCodecCtxOpen = false;
+    std::function<void(qint64)> m_onPreview;
     std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame = Q_NULLPTR;
 };
 

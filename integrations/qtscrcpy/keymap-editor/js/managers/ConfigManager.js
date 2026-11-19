@@ -21,6 +21,10 @@ export class ConfigManager {
         }
     }
 
+    get wheelPinch() {
+        return document.getElementById('wheelPinch').value || undefined;
+    }
+
     setupConfigButtons() {
         const saveButton = document.getElementById('saveConfig');
         const loadButton = document.getElementById('loadConfig');
@@ -58,6 +62,7 @@ export class ConfigManager {
                 switchKey: this.switchKey,
                 mouseMoveMap: mouseMove,
                 keyMapNodes: otherMappings,
+                wheelPinch: this.wheelPinch,
                 width: background?.getAttr('originalWidth') || this.nodeManager.stage.width(),
                 height: background?.getAttr('originalHeight') || this.nodeManager.stage.height()
             };
@@ -94,6 +99,9 @@ export class ConfigManager {
                 if (config.switchKey) {
                     this.switchKey = config.switchKey;
                 }
+
+                const wheelPinch = document.getElementById('wheelPinch');
+                wheelPinch.value = ['standard', 'inverted'].includes(config.wheelPinch) ? config.wheelPinch : '';
 
                 // Load mouseMoveMap if present
                 if (config.mouseMoveMap) {

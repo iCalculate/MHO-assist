@@ -103,8 +103,8 @@ void initializeKeyMapDirectory()
 Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
 {
     ui->setupUi(this);
-    initializeKeyMapDirectory();
     initUI();
+    on_refreshGameScriptBtn_clicked();
 
     updateBootConfig(true);
 
@@ -861,7 +861,8 @@ void Dialog::on_startServerBtn_clicked()
     params.serverLocalPath = getServerPath();
     params.serverRemotePath = Config::getInstance().getServerPath();
     params.pushFilePath = Config::getInstance().getPushFilePath();
-    params.gameScript = camera ? QString() : getGameScript(ui->gameBox->currentText());
+    params.gameScriptName = camera ? QString() : ui->gameBox->currentText();
+    params.gameScript = getGameScript(params.gameScriptName);
     params.logLevel = Config::getInstance().getLogLevel();
     // Apply an encoder preset (when a preset mode is selected) or the ini default.
     const int codecModeIndex = ui->codecModeBox->currentIndex();
@@ -1367,6 +1368,7 @@ void Dialog::on_stopAllServerBtn_clicked()
 
 void Dialog::on_refreshGameScriptBtn_clicked()
 {
+    const auto previous = ui->gameBox->currentText();
     ui->gameBox->clear();
     initializeKeyMapDirectory();
     const QDir userDir(getKeyMapPath());
@@ -1386,6 +1388,9 @@ void Dialog::on_refreshGameScriptBtn_clicked()
             }
         }
     }
+    int selection = ui->gameBox->findText(previous);
+    if (selection < 0) selection = ui->gameBox->findText(QStringLiteral("Generic-Alt.json"));
+    if (selection >= 0) ui->gameBox->setCurrentIndex(selection);
 }
 
 void Dialog::on_applyScriptBtn_clicked()
@@ -1396,7 +1401,8 @@ void Dialog::on_applyScriptBtn_clicked()
         return;
     }
 
-    device->updateScript(getGameScript(ui->gameBox->currentText()));
+    const QString name = ui->gameBox->currentText();
+    device->updateScript(getGameScript(name), name);
 }
 
 void Dialog::on_recordScreenCheck_clicked(bool checked)
