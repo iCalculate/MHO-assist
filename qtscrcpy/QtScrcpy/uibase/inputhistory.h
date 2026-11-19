@@ -16,7 +16,7 @@ inline QString readableKey(int key) {
 
 class InputHistory {
 public:
-    struct Item { QString key; int count; bool held; };
+    struct Item { QString key; int count; bool held; quint64 sequence; };
     QList<Item> items;
     void record(const QString &event) {
         const bool down=event.endsWith(QStringLiteral(" ↓"));
@@ -37,11 +37,11 @@ public:
             ++items.last().count; items.last().held=true; return;
         }
         if(items.size()>=32) items.removeFirst();
-        items.append({key,1,true});
+        items.append({key,1,true,++m_sequence});
     }
     QVariantList entries() const {
         QVariantList result;
-        for(const auto &item:items) result.append(QVariantMap{{"key",item.key},{"count",item.count},{"held",item.held}});
+        for(const auto &item:items) result.append(QVariantMap{{"key",item.key},{"count",item.count},{"held",item.held},{"sequence",QVariant::fromValue(item.sequence)}});
         return result;
     }
     QStringList labels() const {
@@ -49,4 +49,6 @@ public:
         for(const auto &item:items) result.append(item.key+(item.count>1?QStringLiteral(" ×%1").arg(item.count):QString())+(item.held?QStringLiteral(" ↓"):QString()));
         return result;
     }
+private:
+    quint64 m_sequence = 0;
 };

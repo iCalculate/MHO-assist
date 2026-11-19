@@ -15,7 +15,7 @@ class EditorHandler(SimpleHTTPRequestHandler):
         self.profile = profile
         self.adb = adb
         self.serial = serial
-        super().__init__(*args, directory=directory)
+        super().__init__(*args, directory=str(directory))
 
     def log_message(self, *_args):
         pass

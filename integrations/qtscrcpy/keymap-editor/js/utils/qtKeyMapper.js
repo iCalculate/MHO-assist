@@ -1,3 +1,20 @@
+const mouseDragButtons = new Map([
+    ['LeftButton', 'LeftButton'],
+    ['MiddleButton', 'MiddleButton'],
+    ['MidButton', 'MiddleButton'],
+    ['RightButton', 'RightButton'],
+    ['ExtraButton1', 'ExtraButton1'],
+    ['BackButton', 'ExtraButton1'],
+    ['XButton1', 'ExtraButton1'],
+    ['ExtraButton2', 'ExtraButton2'],
+    ['ForwardButton', 'ExtraButton2'],
+    ['XButton2', 'ExtraButton2']
+]);
+
+export function normalizeMouseDragButton(key) {
+    return mouseDragButtons.get(key);
+}
+
 export function getQtKey(code, key, button) {
     // Handle mouse buttons if provided
     if (button !== undefined) {

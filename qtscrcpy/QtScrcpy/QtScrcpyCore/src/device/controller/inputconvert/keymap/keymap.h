@@ -26,7 +26,8 @@ public:
         KMT_STEER_WHEEL,
         KMT_DRAG,
         KMT_MOUSE_MOVE,
-        KMT_ANDROID_KEY
+        KMT_ANDROID_KEY,
+        KMT_MOUSE_DRAG
     };
     Q_ENUM(KeyMapType)
 
@@ -65,6 +66,14 @@ public:
             : type(type), key(key), pos(pos), extendPos(extendPos), extendOffset(extendOffset), androidKey(androidKey)
         {
         }
+    };
+
+    struct MouseDragNode
+    {
+        int button;
+        QPointF pos;
+        double radius; // Fraction of the shorter side of the video.
+        double sensitivity;
     };
 
     struct KeyMapNode
@@ -106,6 +115,7 @@ public:
             {
                 KeyNode keyNode;
             } androidKey;
+            MouseDragNode mouseDrag;
             DATA() {}
             ~DATA() {}
         } data;

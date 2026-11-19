@@ -8,17 +8,7 @@
       "y": 0.224
     },
     "speedRatioX": 5,
-    "speedRatioY": 5,
-    "smallEyes": {
-      "enabled": true,
-      "type": "KMT_CLICK",
-      "switchMap": true,
-      "key": "Key_CapsLock",
-      "pos": {
-        "x": 0.67,
-        "y": 0.225
-      }
-    }
+    "speedRatioY": 5
   },
   "keyMapNodes": [
     {
@@ -219,8 +209,8 @@
       "comment": "",
       "type": "KMT_CLICK",
       "pos": {
-        "x": 0.7752,
-        "y": 0.367
+        "x": 0.7737,
+        "y": 0.3767
       },
       "key": "Key_G",
       "switchMap": false,
@@ -337,6 +327,34 @@
       },
       "key": "Key_Alt",
       "switchMap": false
+    },
+    {
+      "comment": "",
+      "type": "KMT_DRAG",
+      "startPos": {
+        "x": 0.6409,
+        "y": 0.8647
+      },
+      "endPos": {
+        "x": 0.7236,
+        "y": 0.3933
+      },
+      "key": "Key_V",
+      "startDelay": 500,
+      "dragSpeed": 1,
+      "switchMap": false,
+      "opacity": 0.39
+    },
+    {
+      "comment": "",
+      "type": "KMT_MOUSE_DRAG",
+      "pos": {
+        "x": 0.7722,
+        "y": 0.3768
+      },
+      "key": "MiddleButton",
+      "radius": 0.12,
+      "sensitivity": 1
     }
   ]
 }

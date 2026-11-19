@@ -86,6 +86,7 @@ export class ScaleManager {
             switch (node.type) {
                 case 'KMT_CLICK':
                 case 'KMT_CLICK_TWICE':
+                case 'KMT_MOUSE_DRAG':
                     this._updateSingleShapePosition(node);
                     break;
                 case 'KMT_DRAG':

@@ -9,6 +9,7 @@ export default {
     "type_double_click": "双击",
     "type_multi_click": "多次点击",
     "type_drag": "拖动",
+    "type_mouse_drag": "鼠标拖轮盘",
     "type_steer_wheel": "方向盘",
     "type_mouse_move": "鼠标模拟",
 
@@ -37,6 +38,10 @@ export default {
     "drag_speed_help": "• 1最快，0最慢",
     "drag_path": "拖动路径",
     "drag_path_help": "• 拖动端点调整路径\n• 路径定义鼠标移动",
+    "mouse_drag_help": "把标记拖到游戏轮盘的触发位置。默认按住鼠标中键，移动鼠标选择方向，松开中键确认。可在按键框录入其他鼠标按钮。",
+    "mouse_drag_conflict": "这个鼠标按钮已用于另一条映射。同一个按钮只执行列表中最后一条映射。",
+    "mouse_drag_radius": "最大拖动距离（屏幕短边的比例）",
+    "mouse_drag_sensitivity": "拖动灵敏度",
     "start": "起点",
     "end": "终点",
     "steering_wheel": "方向盘",

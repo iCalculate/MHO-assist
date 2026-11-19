@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QMutex>
 #include <QAtomicInt>
+#include <atomic>
 #include <functional>
 
 #include "IDecoder.h"
@@ -24,6 +25,7 @@ public:
     bool open() override;
     void close() override;
     bool push(const AVPacket *packet) override;
+    FrameCounts frameCounts() const override { return {m_decodedFrames.load(std::memory_order_relaxed), 0}; }
     void peekFrame(std::function<void(int,int,uint8_t*)> onFrame) override;
 
     // Metal 渲染回调（主线程执行，CVPixelBufferRef 已 Retain）
@@ -57,6 +59,7 @@ private:
 
     int m_currentWidth = 0;
     int m_currentHeight = 0;
+    std::atomic<quint32> m_decodedFrames{0};
 
     // 背压：pixel buffer 互斥 + 主线程帧数控制
     QMutex m_pixelBufferMutex;

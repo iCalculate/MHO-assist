@@ -66,6 +66,10 @@ protected:
     // mouse
     bool processMouseClick(const QMouseEvent *from);
     bool processMouseMove(const QMouseEvent *from);
+    void clearHeldMouseButton(int button);
+    void startMouseDrag(const KeyMap::MouseDragNode &mapping, const QPointF &cursorPos);
+    void moveMouseDrag(const QMouseEvent *from);
+    void endMouseDrag(bool select);
     void moveCursorTo(const QMouseEvent *from, const QPoint &localPosPixel);
     void mouseMoveStartTouch(const QMouseEvent *from);
     void mouseMoveStopTouch();
@@ -73,7 +77,7 @@ protected:
     void stopMouseMoveTimer();
 
     bool switchGameMap();
-    bool checkCursorPos(const QMouseEvent *from);
+    bool checkCursorPos(const QMouseEvent *from, QPointF *wrappedPos = nullptr);
     void hideMouseCursor(bool hide);
 
     void getDelayQueue(const QPointF& start, const QPointF& end,
@@ -137,6 +141,17 @@ private:
         bool smallEyes = false;
         int ignoreCount = 0;
     } m_ctrlMouseMove;
+
+    struct
+    {
+        int button = Qt::NoButton;
+        QPointF anchor;
+        QPointF offset;
+        QPointF lastPos;
+        bool rebase = false;
+        double radius = 0.0;
+        double sensitivity = 1.0;
+    } m_mouseDrag;
 
     // for drag delay
     struct {

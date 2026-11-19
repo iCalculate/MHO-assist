@@ -10,7 +10,7 @@ bash scripts/build_ffmpeg.sh /c/Build/ffmpeg-4.4.2 /c/Build/ffmpeg-sdk
 
 ```powershell
 python -m pip install -r scripts/requirements-build.txt
-python -m scripts.build_qtscrcpy --qt "C:\Qt\5.15.2\msvc2019_64" --runtime "C:\Build\QtScrcpy-win-x64-v4.2.1" --ffmpeg "C:\Build\ffmpeg-sdk" --pointer-apk "C:\Build\qtscrcpy-pointer.apk" --version v4.2.1-mho.1
+python -m scripts.build_qtscrcpy --qt "C:\Qt\5.15.2\msvc2019_64" --runtime "C:\Build\QtScrcpy-win-x64-v4.2.1" --ffmpeg "C:\Build\ffmpeg-sdk" --pointer-apk "C:\Build\qtscrcpy-pointer.apk" --version v4.2.1-mho.4
 ```
 
 `--pointer-apk` 指向已签名的 Android 光标组件，可用本仓库的 [Android 构建说明](development.md#可选集成)生成。发布包的 APK 与已有魔改版使用同一已签名的构建。私有签名文件留在开发机。

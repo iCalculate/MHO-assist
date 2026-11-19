@@ -119,7 +119,7 @@ def stage_files(app, runtime, qt, pointer, version):
         'https://github.com/rom1v/sndcpy',
         'The Qt client dynamically links FFmpeg 4.4.2 under LGPL-2.1-or-later.\n'
         'https://ffmpeg.org/releases/ffmpeg-4.4.2.tar.xz\n'
-        f'https://github.com/Chauncy-Du/MHO-assist/blob/qtscrcpy-{version}/scripts/build_ffmpeg.sh',
+        f'https://github.com/iCalculate/MHO-assist/blob/qtscrcpy-{version}/scripts/build_ffmpeg.sh',
         'The bundled editor uses the MIT-licensed ScrcpyKeyMapper and its vendored UI libraries.\n'
         'https://github.com/w4po/ScrcpyKeyMapper',
     ]
@@ -213,7 +213,7 @@ def verify(archive, folder, qt):
         if name == 'integrated_assist_test':
             command.append(str(fixture))
         elif name == 'input_reset_test':
-            command.append(str(app / 'keymap/Generic-Alt.json'))
+            command.append(str(PROJECT / 'tests/fixtures/keymap-legacy.json'))
         subprocess.run(command, cwd=app, env=environment, check=True, timeout=30)
     print('QtScrcpy startup, keymap editor, HUD, input and embedded recognition passed.', flush=True)
 

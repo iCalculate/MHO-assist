@@ -10,12 +10,7 @@ export class KeyInputManager {
         event.stopPropagation();
         
         if (event instanceof MouseEvent) {
-            const buttonMap = {
-                0: 'LeftButton',
-                1: 'MiddleButton',
-                2: 'RightButton'
-            };
-            return `${buttonMap[event.button] || 'Unknown'}`;
+            return this.getQtKey(null, null, event.button);
         }
         
         if (event instanceof KeyboardEvent) {

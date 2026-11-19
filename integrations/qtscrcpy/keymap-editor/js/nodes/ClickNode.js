@@ -1,5 +1,7 @@
 import { BaseNode } from './BaseNode.js';
 import { KeyDisplayManager } from '../managers/KeyDisplayManager.js';
+import { MAPPING_TYPES } from '../utils/constants.js';
+import { normalizeMouseDragButton } from '../utils/qtKeyMapper.js';
 
 export class ClickNode extends BaseNode {
     constructor(stage, mappingData) {
@@ -8,9 +10,17 @@ export class ClickNode extends BaseNode {
         this.mappingData = {
             ...mappingData,
             pos: mappingData.pos || { x: 0.5, y: 0.5 },
-            key: mappingData.key || '',
-            switchMap: mappingData.switchMap || false
+            key: mappingData.key || ''
         };
+        if (this.type === MAPPING_TYPES.MOUSE_DRAG) {
+            this.mappingData.key = normalizeMouseDragButton(mappingData.key) || 'MiddleButton';
+            const { radius, sensitivity } = mappingData;
+            this.mappingData.radius = Number.isFinite(radius) && radius > 0 && radius <= 1 ? radius : 0.12;
+            this.mappingData.sensitivity = Number.isFinite(sensitivity) && sensitivity >= 0.1 && sensitivity <= 10 ? sensitivity : 1;
+            delete this.mappingData.switchMap;
+        } else {
+            this.mappingData.switchMap = mappingData.switchMap || false;
+        }
         this.shape = this.createShape();
         this.setupEvents();
     }
@@ -25,12 +35,16 @@ export class ClickNode extends BaseNode {
         });
 
         // Set color based on type
-        const color = this.mappingData.type === 'KMT_CLICK' ? '#0056b3' : '#1e7e34';
+        const colors = {
+            [MAPPING_TYPES.CLICK]: '#0056b3',
+            [MAPPING_TYPES.CLICK_TWICE]: '#1e7e34',
+            [MAPPING_TYPES.MOUSE_DRAG]: '#6610f2'
+        };
 
         // Create the key shape using KeyDisplayManager with key change callback
         const keyDisplay = KeyDisplayManager.createKeyShape(
             this.mappingData.key, 
-            color, 
+            colors[this.type],
             'transparent', 
             2, 
             (newKey) => this.setKey(newKey)
@@ -46,6 +60,9 @@ export class ClickNode extends BaseNode {
     }
 
     setKey(key) {
+        if (this.type === MAPPING_TYPES.MOUSE_DRAG) {
+            key = normalizeMouseDragButton(key) || this.mappingData.key;
+        }
         this.mappingData.key = key;
         
         // Update the key display
@@ -56,6 +73,7 @@ export class ClickNode extends BaseNode {
         if (mappingKeyProperties) {
             mappingKeyProperties.value = key;
         }
+        this.shape.fire('keychange');
     }
 
     setupEvents() {

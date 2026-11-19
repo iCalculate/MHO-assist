@@ -14,6 +14,8 @@ public:
     void stop();
     bool isStarted();
     quint32 skippedFrames() const { return m_curSkipped; }
+    quint32 renderedFrameCount() const { return m_rendered.load(std::memory_order_relaxed); }
+    quint32 skippedFrameCount() const { return m_skipped.load(std::memory_order_relaxed); }
     void addRenderedFrame();
     void addSkippedFrame();
 
@@ -30,7 +32,8 @@ private:
 
 private:
     qint32 m_counterTimer = 0;
-    quint32 m_curRendered = 0;
+    quint32 m_previousRendered = 0;
+    quint32 m_previousSkipped = 0;
     quint32 m_curSkipped = 0;
 
     std::atomic<quint32> m_rendered {0};

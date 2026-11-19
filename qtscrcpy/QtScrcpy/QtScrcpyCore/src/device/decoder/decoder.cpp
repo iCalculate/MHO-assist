@@ -19,6 +19,11 @@ Decoder::~Decoder() {
     delete m_vb;
 }
 
+IDecoder::FrameCounts Decoder::frameCounts() const
+{
+    return {m_vb->renderedFrameCount(), m_vb->skippedFrameCount()};
+}
+
 bool Decoder::open()
 {
     // codec

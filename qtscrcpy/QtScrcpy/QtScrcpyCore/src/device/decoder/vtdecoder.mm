@@ -488,6 +488,7 @@ bool VTDecoder::decode(const unsigned char *data, int size, qint64 pts,
     outWidth = w;
     outHeight = h;
 
+    m_decodedFrames.fetch_add(1, std::memory_order_relaxed);
     d->renderedFrames++;
     if (d->fpsTimer.elapsed() >= 1000) {
         quint32 fps = d->renderedFrames;

@@ -2,7 +2,7 @@
 
 Windows 上的《怪物猎人：旅人》跳舞辅助工具。它从前台游戏或投屏画面读取箭头序列，启用后按顺序发送方向键，并通过箭头变黄判断游戏反馈。
 
-**[下载 Windows x64 便携版](https://github.com/Chauncy-Du/MHO-assist/releases/tag/v5.0.0)** · [QtScrcpy 配置](qtscrcpy.md) · [源码与打包](https://github.com/Chauncy-Du/MHO-assist/blob/main/docs/development.md)
+[独立助手源码 v5.0.0](https://github.com/iCalculate/MHO-assist/tree/v5.0.0) · [QtScrcpy 配置](qtscrcpy.md) · [源码与打包](https://github.com/iCalculate/MHO-assist/blob/main/docs/development.md)
 
 ## 安装与首次使用
 
@@ -40,4 +40,4 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m mho_assist
 ```
 
-源码和识别模板在 `mho_assist/`，打包及离线工具在 `scripts/`，测试和脱敏素材在 `tests/`，可选组件在 `integrations/`。测试、离线回放和发布包构建命令见[开发文档](https://github.com/Chauncy-Du/MHO-assist/blob/main/docs/development.md)。
+源码和识别模板在 `mho_assist/`，打包及离线工具在 `scripts/`，测试和脱敏素材在 `tests/`，可选组件在 `integrations/`。测试、离线回放和发布包构建命令见[开发文档](https://github.com/iCalculate/MHO-assist/blob/main/docs/development.md)。

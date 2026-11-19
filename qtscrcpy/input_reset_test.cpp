@@ -9,6 +9,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 #include <stdexcept>
 #include <iostream>
 #include "controller.h"
@@ -34,7 +37,7 @@ int main(int argc, char **argv) {
     const QString profile = QString::fromUtf8(file.readAll());
     QSet<quint64> active;
     int downs = 0, ups = 0, moves = 0;
-    struct TouchPacket { int action; QPoint pos; qint64 time; };
+    struct TouchPacket { int action; QPoint pos; qint64 time; quint64 id; };
     QVector<TouchPacket> packets;
     QElapsedTimer packetClock; packetClock.start();
     Controller controller([&](const QByteArray &data) -> qint64 {
@@ -43,7 +46,7 @@ int main(int argc, char **argv) {
             const auto id = qFromBigEndian<quint64>(reinterpret_cast<const uchar *>(data.constData()+2));
             packets.append({action, QPoint(
                 qFromBigEndian<qint32>(reinterpret_cast<const uchar *>(data.constData()+10)),
-                qFromBigEndian<qint32>(reinterpret_cast<const uchar *>(data.constData()+14))), packetClock.elapsed()});
+                qFromBigEndian<qint32>(reinterpret_cast<const uchar *>(data.constData()+14))), packetClock.elapsed(), id});
             if (action == 0) { require(!active.contains(id), "duplicate DOWN on active pointer"); active.insert(id); ++downs; }
             if (action == 1) { active.remove(id); ++ups; }
             if (action == 2) { ++moves; }
@@ -190,6 +193,81 @@ int main(int argc, char **argv) {
     std::cout << "PASS: mouse view idle release; intentional small-eyes hold preserved\n";
     toggle();
 
+    QJsonObject wheelProfileObject = QJsonDocument::fromJson(profile.toUtf8()).object();
+    auto wheelNodes = wheelProfileObject["keyMapNodes"].toArray();
+    wheelNodes.append(QJsonObject{
+        {"type", "KMT_MOUSE_DRAG"}, {"key", "MiddleButton"},
+        {"pos", QJsonObject{{"x", 0.75}, {"y", 0.50}}}, {"radius", 0.12}, {"sensitivity", 1.0},
+    });
+    wheelProfileObject["keyMapNodes"] = wheelNodes;
+    const QString wheelProfile = QString::fromUtf8(QJsonDocument(wheelProfileObject).toJson(QJsonDocument::Compact));
+    const QSize wheelViewSize(960, 540);
+    const QPoint wheelAnchor(1440, 540);
+    auto wheelMouse = [&](QEvent::Type type, const QPointF &pos, Qt::MouseButtons buttons) {
+        const auto button = type == QEvent::MouseMove ? Qt::NoButton : Qt::MiddleButton;
+        QMouseEvent event(type, pos, button, buttons, Qt::NoModifier);
+        controller.mouseEvent(&event, size, wheelViewSize);
+        flush();
+    };
+    auto wheelKey = [&](int code, QEvent::Type type) {
+        QKeyEvent event(type, code, Qt::NoModifier);
+        controller.keyEvent(&event, size, wheelViewSize);
+        flush();
+    };
+    controller.updateScript(wheelProfile);
+    toggle();
+    packets.clear();
+    wheelMouse(QEvent::MouseMove, QPointF(480, 270), Qt::NoButton);
+    wheelMouse(QEvent::MouseMove, QPointF(500, 270), Qt::NoButton);
+    require(active.size() == 1 && packets.size() >= 2 && packets.first().action == 0,
+            "a view touch must be active before switching to the radial wheel");
+    const quint64 viewID = packets.first().id;
+    packets.clear();
+    wheelMouse(QEvent::MouseButtonPress, QPointF(500, 270), Qt::MiddleButton);
+    require(active.size() == 1 && packets.size() == 2 && packets[0].action == 1 && packets[0].id == viewID
+            && packets[1].action == 0 && packets[1].pos == wheelAnchor,
+            "middle press must lift the view before touching the wheel anchor");
+    const quint64 wheelID = packets[1].id;
+    QTest::qWait(550); flush();
+    require(active.contains(wheelID) && packets.size() == 2, "holding the wheel must outlast the view idle timer");
+    wheelMouse(QEvent::MouseMove, QPointF(520, 258), Qt::MiddleButton);
+    require(packets.size() == 3 && packets.last().action == 2 && packets.last().id == wheelID
+            && packets.last().pos == wheelAnchor + QPoint(40, -24),
+            "relative mouse movement must drag the same wheel touch at the displayed scale");
+    wheelKey(Qt::Key_W, QEvent::KeyPress);
+    require(active.size() == 2 && packets.last().id != wheelID, "wheel and movement must use separate touches");
+    wheelKey(Qt::Key_W, QEvent::KeyRelease);
+    require(active.size() == 1 && active.contains(wheelID), "releasing movement must preserve the wheel touch");
+    packets.clear();
+    wheelMouse(QEvent::MouseMove, QPointF(650, 120), Qt::MiddleButton);
+    require(packets.size() == 1 && packets.last().action == 2 && packets.last().id == wheelID
+            && (packets.last().pos - (wheelAnchor + QPoint(92, -92))).manhattanLength() <= 2,
+            "the wheel must preserve diagonal angles while clamping to its radius");
+    const QPoint selection = packets.last().pos;
+    wheelMouse(QEvent::MouseButtonRelease, QPointF(650, 120), Qt::NoButton);
+    require(active.isEmpty() && packets.size() == 2 && packets.last().action == 1
+            && packets.last().id == wheelID && packets.last().pos == selection,
+            "middle release must lift the wheel at the selected position");
+    wheelMouse(QEvent::MouseMove, QPointF(680, 120), Qt::NoButton);
+    require(active.size() == 1 && packets.size() == 4 && packets[2].action == 0 && packets[2].pos != wheelAnchor
+            && packets[3].action == 2,
+            "the first movement after middle release must pan the view");
+
+    wheelMouse(QEvent::MouseButtonDblClick, QPointF(680, 120), Qt::MiddleButton);
+    require(active.size() == 1 && packets.last().action == 0 && packets.last().pos == wheelAnchor,
+            "a Qt double-click must initiate the next wheel hold");
+    wheelMouse(QEvent::MouseMove, QPointF(680, 160), Qt::MiddleButton);
+    require(packets.last().action == 2 && packets.last().pos == wheelAnchor + QPoint(0, 80),
+            "a new wheel hold must start with no previous drag offset");
+    QEvent wheelDeactivate(QEvent::WindowDeactivate);
+    QCoreApplication::sendEvent(&window, &wheelDeactivate); flush();
+    require(active.isEmpty() && !controller.isCurrentCustomKeymap(), "focus loss must clear the held wheel");
+    packets.clear();
+    wheelMouse(QEvent::MouseButtonRelease, QPointF(680, 160), Qt::NoButton);
+    require(packets.isEmpty(), "the late middle release after focus loss must not inject another touch");
+    controller.updateScript(profile); flush();
+    std::cout << "PASS: radial wheel anchor, relative drag, radius, simultaneous WASD, selection and camera restoration\n";
+
     for (int i=0;i<50;++i) {
         toggle();key(Qt::Key_W,QEvent::KeyPress);toggle();key(Qt::Key_W,QEvent::KeyRelease);
     }
@@ -227,6 +305,23 @@ int main(int argc, char **argv) {
         nativeKey(Qt::Key_Control,QEvent::KeyPress);
         nativeKey(Qt::Key_Control,QEvent::KeyRelease);
         std::cout << "PASS: lost W/D releases repaired; held D preserved; long holds and duplicate down safe\n";
+#ifdef Q_OS_WIN
+        audit.loadKeyMap(wheelProfile);
+        nativeKey(Qt::Key_Control, QEvent::KeyPress);
+        nativeKey(Qt::Key_Control, QEvent::KeyRelease);
+        audit.physicallyDown.insert(VK_MBUTTON);
+        const QMouseEvent middleDown(QEvent::MouseButtonPress, QPointF(500, 270), Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+        audit.mouseEvent(&middleDown, size, wheelViewSize); flush();
+        const QMouseEvent middleDrag(QEvent::MouseMove, QPointF(500, 310), Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+        audit.mouseEvent(&middleDrag, size, wheelViewSize); flush();
+        require(active.size() == 1 && packets.last().action == 2, "a wheel touch must still be held before simulated lost UP");
+        audit.physicallyDown.remove(VK_MBUTTON);
+        QTest::qWait(350); flush();
+        require(active.isEmpty() && packets.last().action == 1, "the Windows mouse watchdog must recover a lost middle release");
+        nativeKey(Qt::Key_Control, QEvent::KeyPress);
+        nativeKey(Qt::Key_Control, QEvent::KeyRelease);
+        std::cout << "PASS: lost middle release clears the radial wheel\n";
+#endif
     }
     require(downs==ups, "every touch-down must have a matching touch-up");
     std::cout << "PASS: 50 toggle cycles, balanced touch lifecycle: " << downs << " down / " << ups << " up, " << moves << " moves\n";

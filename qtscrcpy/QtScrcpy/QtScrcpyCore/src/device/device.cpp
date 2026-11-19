@@ -890,6 +890,11 @@ bool Device::saveFrame(int width, int height, uint8_t* dataRGB32)
 QVariantMap qsc::Device::inputDiagnostics() const
 {
     QVariantMap data = m_controller ? m_controller->inputDiagnostics() : QVariantMap();
-    if (m_decoder) { data.insert("skipped",m_decoder->property("skipped")); }
+    if (m_decoder) {
+        const auto counts = m_decoder->frameCounts();
+        data.insert("renderedFrameCount", counts.rendered);
+        data.insert("skippedFrameCount", counts.skipped);
+        data.insert("skipped", m_decoder->property("skipped"));
+    }
     return data;
 }

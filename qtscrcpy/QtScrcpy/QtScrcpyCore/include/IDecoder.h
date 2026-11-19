@@ -18,6 +18,13 @@ public:
     explicit IDecoder(QObject *parent = nullptr) : QObject(parent) {}
     virtual ~IDecoder() = default;
 
+    struct FrameCounts {
+        quint32 rendered;
+        quint32 skipped;
+    };
+
+    virtual FrameCounts frameCounts() const = 0;
+
     /// 打开解码器，初始化资源
     virtual bool open() = 0;
 

@@ -19,6 +19,8 @@ public:
     virtual ~VideoBuffer();
 
     quint32 skippedFrames() const { return m_fpsCounter.skippedFrames(); }
+    quint32 renderedFrameCount() const { return m_fpsCounter.renderedFrameCount(); }
+    quint32 skippedFrameCount() const { return m_fpsCounter.skippedFrameCount(); }
     bool init();
     void deInit();
     void lock();

@@ -7,6 +7,7 @@
 #include <QTime>
 #include <QRandomGenerator>
 #include <QKeySequence>
+#include <cmath>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -19,6 +20,29 @@
 #include "controller.h"
 
 #define CURSOR_POS_CHECK 50
+
+static QPointF mouseEventPosition(const QMouseEvent *event)
+{
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+    return event->localPos();
+#else
+    return event->position();
+#endif
+}
+
+#ifdef Q_OS_WIN
+static quint32 mouseVirtualKey(int button)
+{
+    switch (button) {
+    case Qt::LeftButton: return VK_LBUTTON;
+    case Qt::RightButton: return VK_RBUTTON;
+    case Qt::MiddleButton: return VK_MBUTTON;
+    case Qt::BackButton: return VK_XBUTTON1;
+    case Qt::ForwardButton: return VK_XBUTTON2;
+    default: return 0;
+    }
+}
+#endif
 
 InputConvertGame::InputConvertGame(Controller *controller) : InputConvertNormal(controller) {
     qApp->installEventFilter(this);
@@ -72,6 +96,7 @@ void InputConvertGame::releaseAllTouches()
     m_dragDelayData.queuePos.clear();
     m_dragDelayData.queueTimer.clear();
     m_dragDelayData.pressKey = 0;
+    endMouseDrag(false);
     for (int id = 0; id < MULTI_TOUCH_MAX_NUM; ++id) {
         if (m_touchActive[id]) {
             sendTouchUpEvent(id, m_touchPositions[id]);
@@ -106,7 +131,9 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
     if (!from) { return; }
     const int button = static_cast<int>(from->button());
     if (from->type() == QEvent::MouseButtonRelease && m_ignoreMouseRelease.remove(button)) { return; }
-    if (from->type() == QEvent::MouseButtonPress) { m_ignoreMouseRelease.remove(button); }
+    if (from->type() == QEvent::MouseButtonPress || from->type() == QEvent::MouseButtonDblClick) {
+        m_ignoreMouseRelease.remove(button);
+    }
     if (from->type() == QEvent::MouseButtonPress || from->type() == QEvent::MouseButtonRelease) {
         QString name = button==Qt::LeftButton?QStringLiteral("mouse-left"):button==Qt::RightButton?QStringLiteral("mouse-right"):button==Qt::MiddleButton?QStringLiteral("mouse-middle"):touchOwner(button);
         recordInput(name + (from->type()==QEvent::MouseButtonPress?QStringLiteral(" ↓"):QStringLiteral(" ↑")));
@@ -125,6 +152,10 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
 
     if (!m_needBackMouseMove && m_gameMap) {
         updateSize(frameSize, showSize);
+        if (from->type() == QEvent::MouseMove && m_mouseDrag.button != Qt::NoButton) {
+            moveMouseDrag(from);
+            return;
+        }
         // mouse move
         if (m_keyMap.isValidMouseMoveMap()) {
             if (processMouseMove(from)) {
@@ -191,6 +222,9 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
         if (m_keyMap.isValidMouseMoveMap() && from->key() == m_keyMap.getMouseMoveMap().data.mouseMove.smallEyes.key) {
             const quint64 viewGeneration = ++m_viewGeneration;
             m_ctrlMouseMove.smallEyes = (QEvent::KeyPress == from->type());
+            if (m_mouseDrag.button != Qt::NoButton) {
+                return;
+            }
             stopMouseMoveTimer();
             mouseMoveStopTouch();
             m_ctrlMouseMove.lastPos = QPointF();
@@ -251,7 +285,9 @@ void InputConvertGame::loadKeyMap(const QString &json)
 void InputConvertGame::updateSize(const QSize &frameSize, const QSize &showSize)
 {
     if (showSize != m_showSize) {
-        if (m_gameMap && m_keyMap.isValidMouseMoveMap()) {
+        const bool draggingWheel = m_mouseDrag.button != Qt::NoButton;
+        m_mouseDrag.rebase = draggingWheel;
+        if (draggingWheel || (m_gameMap && m_keyMap.isValidMouseMoveMap())) {
 #ifdef QT_NO_DEBUG
             // show size change, resize grab cursor
             emit grabCursor(true);
@@ -470,6 +506,12 @@ void InputConvertGame::processKeyClick(const QPointF &clickPos, bool clickTwice,
 {
     if (switchMap && QEvent::KeyRelease == from->type()) {
         m_needBackMouseMove = !m_needBackMouseMove;
+        if (m_needBackMouseMove && m_mouseDrag.button != Qt::NoButton) {
+            const int button = m_mouseDrag.button;
+            m_ignoreMouseRelease.insert(button);
+            clearHeldMouseButton(button);
+            endMouseDrag(false);
+        }
         hideMouseCursor(!m_needBackMouseMove);
     }
 
@@ -627,27 +669,139 @@ bool InputConvertGame::processMouseClick(const QMouseEvent *from)
     }
 
     if (QEvent::MouseButtonPress == from->type() || QEvent::MouseButtonDblClick == from->type()) {
-        m_missingHostKeys.remove(-static_cast<int>(from->button()));
-        m_observedHostMouse.remove(static_cast<int>(from->button()));
+        const int button = from->button();
+        m_missingHostKeys.remove(-button);
 #ifdef Q_OS_WIN
-        const int vk = from->button() == Qt::LeftButton ? VK_LBUTTON : from->button() == Qt::RightButton ? VK_RBUTTON : from->button() == Qt::MiddleButton ? VK_MBUTTON : 0;
-        if (vk && hostKeyDown(static_cast<quint32>(vk))) { m_observedHostMouse.insert(static_cast<int>(from->button())); }
+        const quint32 vk = mouseVirtualKey(button);
+        if (vk && hostKeyDown(vk)) { m_observedHostMouse.insert(button); }
 #endif
-        m_pressedMouseButtons.insert(static_cast<int>(from->button()));
+        m_pressedMouseButtons.insert(button);
+        if (node.type == KeyMap::KMT_MOUSE_DRAG) {
+            startMouseDrag(node.data.mouseDrag, mouseEventPosition(from));
+            return true;
+        }
         int id = attachTouchID(from->button());
         sendTouchDownEvent(id, node.data.click.keyNode.pos);
         return true;
     }
     if (QEvent::MouseButtonRelease == from->type()) {
-        m_missingHostKeys.remove(-static_cast<int>(from->button()));
-        m_observedHostMouse.remove(static_cast<int>(from->button()));
-        m_pressedMouseButtons.remove(static_cast<int>(from->button()));
+        const int button = from->button();
+        clearHeldMouseButton(button);
+        if (node.type == KeyMap::KMT_MOUSE_DRAG) {
+            if (m_mouseDrag.button == button) {
+                m_mouseDrag.lastPos = mouseEventPosition(from);
+                endMouseDrag(true);
+            }
+            return true;
+        }
         int id = getTouchID(from->button());
         sendTouchUpEvent(id, node.data.click.keyNode.pos);
         detachTouchID(from->button());
         return true;
     }
     return false;
+}
+
+void InputConvertGame::clearHeldMouseButton(int button)
+{
+    m_missingHostKeys.remove(-button);
+    m_observedHostMouse.remove(button);
+    m_pressedMouseButtons.remove(button);
+}
+
+void InputConvertGame::startMouseDrag(const KeyMap::MouseDragNode &mapping, const QPointF &cursorPos)
+{
+    if (m_mouseDrag.button != Qt::NoButton || m_frameSize.isEmpty() || m_showSize.isEmpty()) {
+        return;
+    }
+    // Release the view finger before allocating the wheel finger, and invalidate any delayed view restart.
+    ++m_viewGeneration;
+    stopMouseMoveTimer();
+    mouseMoveStopTouch();
+    m_processMouseMove = true;
+
+    const int id = attachTouchID(mapping.button);
+    if (id < 0) {
+        return;
+    }
+    m_ctrlMouseMove.ignoreCount = 0;
+    m_mouseDrag.button = mapping.button;
+    m_mouseDrag.anchor = QPointF(qMin(mapping.pos.x(), (m_frameSize.width() - 1.0) / m_frameSize.width()),
+                                 qMin(mapping.pos.y(), (m_frameSize.height() - 1.0) / m_frameSize.height()));
+    m_mouseDrag.lastPos = cursorPos;
+    m_mouseDrag.offset = QPointF();
+    m_mouseDrag.rebase = false;
+    m_mouseDrag.radius = mapping.radius;
+    m_mouseDrag.sensitivity = mapping.sensitivity;
+#ifdef QT_NO_DEBUG
+    if (!m_keyMap.isValidMouseMoveMap()) {
+        emit grabCursor(true);
+    }
+#endif
+    sendTouchDownEvent(id, m_mouseDrag.anchor);
+}
+
+void InputConvertGame::moveMouseDrag(const QMouseEvent *from)
+{
+    if (m_frameSize.isEmpty() || m_showSize.isEmpty()) {
+        return;
+    }
+    const QPointF cursorPos = mouseEventPosition(from);
+    const QPointF delta = m_mouseDrag.rebase ? QPointF() : cursorPos - m_mouseDrag.lastPos;
+    m_mouseDrag.rebase = false;
+    m_mouseDrag.lastPos = cursorPos;
+    checkCursorPos(from, &m_mouseDrag.lastPos);
+    if (delta.isNull()) {
+        return;
+    }
+
+    const double shortSide = qMin(m_showSize.width(), m_showSize.height());
+    QPointF offset = m_mouseDrag.offset + delta * (m_mouseDrag.sensitivity / shortSide);
+    const double distance = std::hypot(offset.x(), offset.y());
+    double scale = distance > m_mouseDrag.radius ? m_mouseDrag.radius / distance : 1.0;
+    const QPointF displacement(offset.x() * shortSide / m_showSize.width(),
+                               offset.y() * shortSide / m_showSize.height());
+    const QPointF anchor = m_mouseDrag.anchor;
+    // Shorten the same ray at a screen edge so a diagonal retains its direction.
+    const double maxX = (m_frameSize.width() - 1.0) / m_frameSize.width();
+    const double maxY = (m_frameSize.height() - 1.0) / m_frameSize.height();
+    if (displacement.x() != 0.0) {
+        const double boundary = displacement.x() > 0.0 ? maxX : 0.0;
+        scale = qMin(scale, (boundary - anchor.x()) / displacement.x());
+    }
+    if (displacement.y() != 0.0) {
+        const double boundary = displacement.y() > 0.0 ? maxY : 0.0;
+        scale = qMin(scale, (boundary - anchor.y()) / displacement.y());
+    }
+    scale = qMax(0.0, scale);
+    m_mouseDrag.offset = offset * scale;
+    sendTouchMoveEvent(getTouchID(m_mouseDrag.button), anchor + displacement * scale);
+}
+
+void InputConvertGame::endMouseDrag(bool select)
+{
+    const int button = m_mouseDrag.button;
+    if (button == Qt::NoButton) {
+        return;
+    }
+    const int id = getTouchID(button);
+    if (id >= 0) {
+        if (!select) {
+            sendTouchMoveEvent(id, m_mouseDrag.anchor);
+        }
+        sendTouchUpEvent(id, m_touchPositions[id]);
+        detachTouchID(button);
+    }
+    m_mouseDrag.button = Qt::NoButton;
+#ifdef QT_NO_DEBUG
+    if (!m_keyMap.isValidMouseMoveMap()) {
+        emit grabCursor(false);
+    }
+#endif
+    m_ctrlMouseMove.lastPos = m_mouseDrag.lastPos;
+    if (select && m_ctrlMouseMove.smallEyes) {
+        mouseMoveStartTouch(nullptr);
+    }
 }
 
 bool InputConvertGame::processMouseMove(const QMouseEvent *from)
@@ -715,25 +869,30 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
     return true;
 }
 
-bool InputConvertGame::checkCursorPos(const QMouseEvent *from)
+bool InputConvertGame::checkCursorPos(const QMouseEvent *from, QPointF *wrappedPos)
 {
     bool moveCursor = false;
     QPoint pos = from->pos();
-    if (pos.x() < CURSOR_POS_CHECK) {
-        pos.setX(m_showSize.width() - CURSOR_POS_CHECK);
+    const int marginX = qMin(CURSOR_POS_CHECK, m_showSize.width() / 4);
+    const int marginY = qMin(CURSOR_POS_CHECK, m_showSize.height() / 4);
+    if (pos.x() < marginX) {
+        pos.setX(m_showSize.width() - marginX);
         moveCursor = true;
-    } else if (pos.x() > m_showSize.width() - CURSOR_POS_CHECK) {
-        pos.setX(CURSOR_POS_CHECK);
+    } else if (pos.x() > m_showSize.width() - marginX) {
+        pos.setX(marginX);
         moveCursor = true;
-    } else if (pos.y() < CURSOR_POS_CHECK) {
-        pos.setY(m_showSize.height() - CURSOR_POS_CHECK);
+    } else if (pos.y() < marginY) {
+        pos.setY(m_showSize.height() - marginY);
         moveCursor = true;
-    } else if (pos.y() > m_showSize.height() - CURSOR_POS_CHECK) {
-        pos.setY(CURSOR_POS_CHECK);
+    } else if (pos.y() > m_showSize.height() - marginY) {
+        pos.setY(marginY);
         moveCursor = true;
     }
 
     if (moveCursor) {
+        if (wrappedPos) {
+            *wrappedPos = pos;
+        }
         moveCursorTo(from, pos);
     }
 
@@ -895,18 +1054,18 @@ void InputConvertGame::auditHostInput()
     } else { m_missingHostKeys.remove(-100); }
     const auto buttons = m_pressedMouseButtons.values();
     for (int button : buttons) {
-        const int vk = button == Qt::LeftButton ? VK_LBUTTON : button == Qt::RightButton ? VK_RBUTTON : button == Qt::MiddleButton ? VK_MBUTTON : 0;
+        const quint32 vk = mouseVirtualKey(button);
         if (!vk) { continue; }
-        if (hostKeyDown(static_cast<quint32>(vk))) {
+        if (hostKeyDown(vk)) {
             m_observedHostMouse.insert(button); m_missingHostKeys.remove(-button); continue;
         }
         if (!m_observedHostMouse.contains(button)) { continue; }
         if (!m_missingHostKeys.contains(-button)) { m_missingHostKeys.insert(-button); continue; }
         qWarning().noquote() << "input watchdog: missing mouse UP; repairing" << touchOwner(button);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(), static_cast<Qt::MouseButton>(button), Qt::NoButton, Qt::NoModifier);
+        const QPointF cursorPos = m_mouseDrag.button == button ? m_mouseDrag.lastPos : QPointF();
+        QMouseEvent release(QEvent::MouseButtonRelease, cursorPos, static_cast<Qt::MouseButton>(button), Qt::NoButton, Qt::NoModifier);
         ++m_repairCount; m_lastRepair = touchOwner(button);
         processMouseClick(&release);
-        m_missingHostKeys.remove(-button);
     }
 #endif
     if (!m_gameMap) { return; }
@@ -950,5 +1109,5 @@ QVariantMap InputConvertGame::inputDiagnostics() const
     return {{"heldKeys",held},{"history",m_inputHistory.labels()},{"historyEntries",m_inputHistory.entries()},{"held",held.isEmpty()?QStringLiteral("无"):held.join(" + ")},
             {"touches",touches.isEmpty()?QStringLiteral("无"):touches.join(", ")},
             {"repairs",m_repairCount},{"lastRepair",m_lastRepair},{"uiGapMs",m_lastUiGap},
-            {"view",m_ctrlMouseMove.smallEyes?QStringLiteral("小眼睛"):m_ctrlMouseMove.touching?QStringLiteral("移动中"):QStringLiteral("已松开")}};
+            {"view",m_mouseDrag.button!=Qt::NoButton?QStringLiteral("拖轮盘"):m_ctrlMouseMove.smallEyes?QStringLiteral("小眼睛"):m_ctrlMouseMove.touching?QStringLiteral("移动中"):QStringLiteral("已松开")}};
 }

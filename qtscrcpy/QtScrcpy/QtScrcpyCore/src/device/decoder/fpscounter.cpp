@@ -26,21 +26,25 @@ bool FpsCounter::isStarted()
 
 void FpsCounter::addRenderedFrame()
 {
-    m_rendered++;
+    m_rendered.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FpsCounter::addSkippedFrame()
 {
-    m_skipped++;
+    m_skipped.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FpsCounter::timerEvent(QTimerEvent *event)
 {
     if (event && m_counterTimer == event->timerId()) {
-        m_curRendered = m_rendered.exchange(0);
-        m_curSkipped = m_skipped.exchange(0);
-        emit updateFPS(m_curRendered);
-        qInfo("video stats rendered=%u skipped=%u", m_curRendered, m_curSkipped);
+        const quint32 rendered = renderedFrameCount();
+        const quint32 skipped = skippedFrameCount();
+        const quint32 intervalRendered = rendered - m_previousRendered;
+        m_curSkipped = skipped - m_previousSkipped;
+        m_previousRendered = rendered;
+        m_previousSkipped = skipped;
+        emit updateFPS(intervalRendered);
+        qInfo("video stats rendered=%u skipped=%u", intervalRendered, m_curSkipped);
     }
 }
 
@@ -62,4 +66,7 @@ void FpsCounter::resetCounter()
 {
     m_rendered = 0;
     m_skipped = 0;
+    m_previousRendered = 0;
+    m_previousSkipped = 0;
+    m_curSkipped = 0;
 }

@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMetaEnum>
+#include <new>
 
 #include "keymap.h"
 
@@ -308,6 +309,26 @@ void KeyMap::loadKeyMap(const QString &json)
                 keyMapNode.data.androidKey.keyNode.androidKey = static_cast<AndroidKeycode>(getItemDouble(node, "androidKey"));
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
+            case KeyMap::KMT_MOUSE_DRAG: {
+                const auto key = getItemKey(node, "key");
+                const QPointF pos = getItemPos(node, "pos");
+                const double radius = node.value("radius").toDouble(0.12);
+                const double sensitivity = node.value("sensitivity").toDouble(1.0);
+                const bool supportedButton = key.second == Qt::LeftButton || key.second == Qt::RightButton
+                    || key.second == Qt::MiddleButton || key.second == Qt::BackButton || key.second == Qt::ForwardButton;
+                if (key.first != AT_MOUSE || !supportedButton || !checkItemPos(node, "pos")
+                    || pos.x() < 0.0 || pos.x() > 1.0 || pos.y() < 0.0 || pos.y() > 1.0
+                    || (node.contains("radius") && !checkItemDouble(node, "radius"))
+                    || (node.contains("sensitivity") && !checkItemDouble(node, "sensitivity"))
+                    || radius <= 0.0 || radius > 1.0 || sensitivity < 0.1 || sensitivity > 10.0) {
+                    qWarning() << "json error: invalid KMT_MOUSE_DRAG";
+                    break;
+                }
+                KeyMapNode keyMapNode;
+                keyMapNode.type = type;
+                new (&keyMapNode.data.mouseDrag) MouseDragNode{ key.second, pos, radius, sensitivity };
+                m_keyMapNodes.push_back(keyMapNode);
+            } break;
             default:
                 qWarning() << "json error: keyMapNodes invalid node type:" << node.value("type").toString();
                 break;
@@ -406,6 +427,9 @@ void KeyMap::makeReverseMap()
             QMultiHash<int, KeyMapNode *> &m = node.data.androidKey.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.androidKey.keyNode.key, &node);
         } break;
+        case KMT_MOUSE_DRAG:
+            m_rmapMouse.insert(node.data.mouseDrag.button, &node);
+            break;
         default:
             break;
         }

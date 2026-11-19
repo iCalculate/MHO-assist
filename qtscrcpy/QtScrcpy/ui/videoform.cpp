@@ -129,6 +129,7 @@ void VideoForm::initUI()
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
 
     ui->keepRatioWidget->setDiagnosticsWidget(m_diagnostics);
+    m_diagnosticTimer.setTimerType(Qt::PreciseTimer);
     m_diagnosticTimer.setInterval(125);
     connect(&m_diagnosticTimer, &QTimer::timeout, this, &VideoForm::updateDiagnostics);
     m_diagnosticTimer.start();

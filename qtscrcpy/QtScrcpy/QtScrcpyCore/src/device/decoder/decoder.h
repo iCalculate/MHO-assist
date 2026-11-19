@@ -22,6 +22,7 @@ public:
     bool open() override;
     void close() override;
     bool push(const AVPacket *packet) override;
+    FrameCounts frameCounts() const override;
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame) override;
     void onVideoSessionChanged(const QSize &size) override;
     void setRenderExpiredFrames(bool enabled) override;

@@ -49,7 +49,7 @@ void KeepRatioWidget::adjustSubWidget()
     const double ratio = m_widthHeightRatio > 0 ? m_widthHeightRatio : 1.0;
     if (m_diagnostics && m_showDiagnostics) {
         // A fixed horizontal header, never an overlay or a side panel.
-        const int panelHeight = qMin(area.width()<900?280:146, qMax(1,area.height()-1));
+        const int panelHeight = qBound(1, m_diagnostics->heightForWidth(area.width()), qMax(1, area.height() - 1));
         m_diagnostics->setGeometry(0, 0, area.width(), panelHeight);
         area.setTop(panelHeight);
         m_diagnostics->raise();

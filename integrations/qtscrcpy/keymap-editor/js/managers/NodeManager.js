@@ -4,6 +4,7 @@ import { MultiClickNode } from '../nodes/MultiClickNode.js';
 import { SteerWheelNode } from '../nodes/SteerWheelNode.js';
 import { MouseMoveNode } from '../nodes/MouseMoveNode.js';
 import { MAPPING_TYPES } from '../utils/constants.js';
+import { normalizeMouseDragButton } from '../utils/qtKeyMapper.js';
 import { KeyDisplayManager } from './KeyDisplayManager.js';
 
 export class NodeManager {
@@ -218,6 +219,7 @@ export class NodeManager {
             case MAPPING_TYPES.CLICK_TWICE: return 'bi bi-2-circle-fill';
             case MAPPING_TYPES.CLICK_MULTI: return 'bi bi-bezier2';
             case MAPPING_TYPES.DRAG: return 'bi bi-arrow-down-up';
+            case MAPPING_TYPES.MOUSE_DRAG: return 'bi bi-compass-fill';
             case MAPPING_TYPES.STEER_WHEEL: return 'bi bi-dpad-fill';
             case MAPPING_TYPES.MOUSE_MOVE: return 'bi bi-mouse2-fill';
             default: return 'bi bi-question-circle-fill';
@@ -274,6 +276,7 @@ export class NodeManager {
         switch (source.type) {
             case MAPPING_TYPES.CLICK:
             case MAPPING_TYPES.CLICK_TWICE:
+            case MAPPING_TYPES.MOUSE_DRAG:
                 node = new ClickNode(this.stage, source);
                 break;
             case MAPPING_TYPES.CLICK_MULTI:
@@ -310,6 +313,14 @@ export class NodeManager {
 
         // add to node list (HTML)
         this.addToNodeList(node);
+
+        if (source.type === MAPPING_TYPES.MOUSE_DRAG) {
+            node.shape.on('keychange', () => {
+                const item = this.nodeListContainer?.children[this.nodes.indexOf(node)];
+                if (item) item.lastElementChild.textContent = this.getNodeLabel(node);
+                if (this.selectedNode === node) this.updateMouseDragConflict(node);
+            });
+        }
 
         return node;
     }
@@ -447,6 +458,7 @@ export class NodeManager {
                 case MAPPING_TYPES.CLICK_TWICE: return 'type_double_click';
                 case MAPPING_TYPES.CLICK_MULTI: return 'type_multi_click';
                 case MAPPING_TYPES.DRAG: return 'type_drag';
+                case MAPPING_TYPES.MOUSE_DRAG: return 'type_mouse_drag';
                 case MAPPING_TYPES.STEER_WHEEL: return 'type_steer_wheel';
                 case MAPPING_TYPES.MOUSE_MOVE: return 'type_mouse_move';
                 default: return type;
@@ -536,6 +548,26 @@ ${t('end')}: (${(endPos.x).toFixed(3)}, ${(endPos.y).toFixed(3)})</pre>
                         <div class="form-text mt-2">${formatHelp(t('drag_path_help'))}</div>
                     </div>
                 `;
+
+            case MAPPING_TYPES.MOUSE_DRAG: {
+                const { radius, sensitivity } = node.mappingData;
+                const { x, y } = window.scaleManager.normalizePosition(node.shape.x(), node.shape.y());
+                return `
+                    <p class="form-text">${t('mouse_drag_help')}</p>
+                    <p class="text-warning-emphasis" id="mouseDragConflict" hidden>${t('mouse_drag_conflict')}</p>
+                    <pre class="form-control">${t('position_label')}: (${x.toFixed(3)}, ${y.toFixed(3)})</pre>
+                    <div class="mb-3">
+                        <label for="mouseDragRadius" class="form-label">${t('mouse_drag_radius')}</label>
+                        <input type="number" class="form-control" id="mouseDragRadius" data-setting="radius"
+                               value="${radius}" min="0" max="1" step="any" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="mouseDragSensitivity" class="form-label">${t('mouse_drag_sensitivity')}</label>
+                        <input type="number" class="form-control" id="mouseDragSensitivity" data-setting="sensitivity"
+                               value="${sensitivity}" min="0.1" max="10" step="any" required>
+                    </div>
+                `;
+            }
 
             case MAPPING_TYPES.STEER_WHEEL:
                 const centerPos = node.mappingData.centerPos;
@@ -647,6 +679,7 @@ ${t('end')}: (${(endPos.x).toFixed(3)}, ${(endPos.y).toFixed(3)})</pre>
         const keyInputContainer = mappingForm.querySelector('#mappingKeyPropertiesContainer');
         if (keyInput && keyInputContainer) {
             keyInput.disabled = false;
+            keyInput.readOnly = mappingData.type === MAPPING_TYPES.MOUSE_DRAG;
             if (mappingData.type === MAPPING_TYPES.STEER_WHEEL ||
                 mappingData.type === MAPPING_TYPES.MOUSE_MOVE) {
                 keyInputContainer.style.display = 'none';
@@ -668,7 +701,7 @@ ${t('end')}: (${(endPos.x).toFixed(3)}, ${(endPos.y).toFixed(3)})</pre>
         // Update switch map checkbox
         const switchMapCheckbox = mappingForm.querySelector('#switchMap');
         if (switchMapCheckbox) {
-            switchMapCheckbox.disabled = false;
+            switchMapCheckbox.disabled = mappingData.type === MAPPING_TYPES.MOUSE_DRAG;
             let isChecked;
             if (mappingData.type === MAPPING_TYPES.MOUSE_MOVE) {
                 // For mouse move, get switchMap from smallEyes
@@ -689,6 +722,19 @@ ${t('end')}: (${(endPos.x).toFixed(3)}, ${(endPos.y).toFixed(3)})</pre>
         // Update the content
         propertiesContainer.innerHTML = this.getMappingPropertiesContent(this.selectedNode);
 
+        if (mappingData.type === MAPPING_TYPES.MOUSE_DRAG) {
+            this.updateMouseDragConflict(this.selectedNode);
+            propertiesContainer.querySelectorAll('[data-setting]').forEach(input => {
+                input.addEventListener('change', () => {
+                    const setting = input.dataset.setting;
+                    if (input.validity.valid && input.valueAsNumber > 0) {
+                        mappingData[setting] = input.valueAsNumber;
+                    } else {
+                        input.value = mappingData[setting];
+                    }
+                });
+            });
+        }
 
         // If it's a steering wheel, set up the key bindings
         if (mappingData.type === MAPPING_TYPES.STEER_WHEEL) {
@@ -778,6 +824,13 @@ ${t('end')}: (${(endPos.x).toFixed(3)}, ${(endPos.y).toFixed(3)})</pre>
                 this.selectedNode.setDragSpeed(parseFloat(dragSpeedInput.value));
             });
         }
+    }
+
+    updateMouseDragConflict(node) {
+        const key = node.mappingData.key;
+        document.getElementById('mouseDragConflict').hidden = !this.nodes.some(other =>
+            other !== node && normalizeMouseDragButton(other.mappingData.key) === key
+        );
     }
 
     getMappingsData() {

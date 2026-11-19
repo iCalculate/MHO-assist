@@ -2,14 +2,22 @@
 
 面向《怪物猎人：旅人》的 Windows 安卓投屏工具，基于 QtScrcpy 4.2.1。方向助手直接读取投屏视频帧，在同一个投屏窗口内定位、识别并输入方向序列。游戏键位、按键编辑器、顶部诊断和手机光标都在整包内。
 
-**[下载 Windows x64 整包](https://github.com/Chauncy-Du/MHO-assist/releases/latest)** · [源码与构建](https://github.com/Chauncy-Du/MHO-assist/blob/main/docs/build-qtscrcpy.md)
+**[下载 Windows x64 整包](https://github.com/iCalculate/MHO-assist/releases/latest)** · [源码与构建](https://github.com/iCalculate/MHO-assist/blob/main/docs/build-qtscrcpy.md)
 
 ## 在新电脑上启动
 
-1. 在 Releases 的 **Assets** 下载 `MHO-QtScrcpy-v4.2.1-mho.1-windows-x64.zip`，完整解压到可写目录。双击 `MHO-QtScrcpy\QtScrcpy.exe`。
+1. 在 Releases 的 **Assets** 下载 `MHO-QtScrcpy-v4.2.1-mho.4-windows-x64.zip`，完整解压到可写目录。双击 `MHO-QtScrcpy\QtScrcpy.exe`。
 2. 在 Android 手机上开启 **USB 调试**。通过 USB 数据线连接电脑，解锁手机并确认调试授权。在 QtScrcpy 刷新设备，选中手机并启动投屏。
 3. 在主控窗口的键位脚本列表选 **Generic-Alt**，点击 **应用**。回到投屏窗口按 **Ctrl** 切换为游戏映射。用 **W/A/S/D** 和方向键先手动确认触点位置。
 4. 游戏界面或手机比例变化时，点投屏窗口顶部的 **按键配置**。可以抓取当前手机画面当作背景，调整触点并保存。回 QtScrcpy 刷新脚本并重新应用，再按 Ctrl 恢复映射。
+
+发布包内的 `keymap/Generic-Alt.json` 包含当前使用的配置，包括鼠标中键轮盘和 V 键拖动。已有安装可在 **打开键位目录** 中备份旧文件，再复制新版 `Generic-Alt.json` 并刷新、重新应用脚本。
+
+## 用鼠标选锁定轮盘
+
+在 **按键配置** 里抓取游戏画面，把 **鼠标拖轮盘** 拖到手机上按住即可打开轮盘的位置。默认绑定鼠标中键。保存当前配置后，在主控窗口重新应用键位脚本，按 **Ctrl** 开启映射。
+
+按住中键并移动鼠标来选择部位，松开即向游戏提交选中的方向，随后继续用鼠标转视角。拖动距离不足时可提高 **最大拖动距离**，鼠标移动太慢或太快时可调整 **拖动灵敏度**。
 
 ## 投屏窗口里的方向助手
 
@@ -30,4 +38,4 @@
 - `integrations/` 保存键位编辑器及 Android 光标源码。
 - `scripts/` 提供构建和打包工具，`tests/` 包含脱敏测试素材。
 
-早期独立工具的使用说明见 [独立方向助手](https://github.com/Chauncy-Du/MHO-assist/blob/main/docs/standalone-direction-assistant.md)。QtScrcpy 源码基于其 [上游 v4.2.1](https://github.com/barry-ran/QtScrcpy/tree/v4.2.1)，键位编辑器基于 [ScrcpyKeyMapper](https://github.com/w4po/ScrcpyKeyMapper)。
+早期独立工具的使用说明见 [独立方向助手](https://github.com/iCalculate/MHO-assist/blob/main/docs/standalone-direction-assistant.md)。QtScrcpy 源码基于其 [上游 v4.2.1](https://github.com/barry-ran/QtScrcpy/tree/v4.2.1)，键位编辑器基于 [ScrcpyKeyMapper](https://github.com/w4po/ScrcpyKeyMapper)。

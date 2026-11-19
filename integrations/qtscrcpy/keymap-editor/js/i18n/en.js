@@ -9,6 +9,7 @@ export default {
     "type_double_click": "Double Click",
     "type_multi_click": "Multi Click",
     "type_drag": "Drag",
+    "type_mouse_drag": "Mouse Wheel Gesture",
     "type_steer_wheel": "Steering Wheel",
     "type_mouse_move": "Mouse Map",
 
@@ -37,6 +38,10 @@ export default {
     "drag_speed_help": "• 1 is fastest, 0 is slowest",
     "drag_path": "Drag Path",
     "drag_path_help": "• Drag endpoints to adjust path\n• Path defines mouse movement",
+    "mouse_drag_help": "Place the marker on the in-game wheel button. Hold the middle mouse button, move to select a direction, and release to confirm. Use the key field to bind another mouse button.",
+    "mouse_drag_conflict": "This mouse button is already assigned. Only its last mapping in the list will run.",
+    "mouse_drag_radius": "Maximum drag distance (fraction of the shorter screen side)",
+    "mouse_drag_sensitivity": "Drag sensitivity",
     "start": "Start",
     "end": "End",
     "steering_wheel": "Steering Wheel",
