@@ -277,6 +277,11 @@ bool InputConvertGame::isCurrentCustomKeymap()
     return m_gameMap;
 }
 
+void InputConvertGame::releaseCustomKeymap()
+{
+    if (m_gameMap) switchGameMap();
+}
+
 void InputConvertGame::loadKeyMap(const QString &json)
 {
     m_keyMap.loadKeyMap(json);

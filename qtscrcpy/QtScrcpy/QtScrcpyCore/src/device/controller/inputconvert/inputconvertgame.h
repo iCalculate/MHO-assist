@@ -23,6 +23,7 @@ public:
     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize);
     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize);
     virtual bool isCurrentCustomKeymap();
+    void releaseCustomKeymap();
 
     void loadKeyMap(const QString &json);
     QVariantMap inputDiagnostics() const override;

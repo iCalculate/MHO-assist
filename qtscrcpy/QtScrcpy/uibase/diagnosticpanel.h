@@ -9,11 +9,14 @@
 #include <QScrollBar>
 #include <QElapsedTimer>
 #include <QVector>
+#include <QActionGroup>
+#include <QMenu>
 #include <array>
 
 class DiagnosticPanel final : public QWidget {
 public:
-    QToolButton *assistButton, *regionButton, *resetButton, *pointerButton, *keymapButton;
+    QToolButton *assistButton, *regionButton, *resetButton, *pointerButton, *keymapButton, *fishingButton;
+    QAction *fishingHistoryAction;
     explicit DiagnosticPanel(QWidget *parent=nullptr) : QWidget(parent) {
         QFont f(QStringLiteral("Microsoft YaHei UI")); f.setPixelSize(12); setFont(f);
         setAttribute(Qt::WA_OpaquePaintEvent);
@@ -27,7 +30,19 @@ public:
         regionButton->setToolTip(QStringLiteral("拖框移动；拖右下角缩放；框外拖动重新框选。调整时暂停输入。"));
         resetButton=new QToolButton(this);resetButton->setText(QStringLiteral("自动定位"));resetButton->setToolTip(QStringLiteral("恢复记忆范围，再根据四方向按钮连续确认并自动定位。手动调整后保持手动范围。"));
         pointerButton=new QToolButton(this);pointerButton->setText(QStringLiteral("手机光标"));pointerButton->setCheckable(true);pointerButton->setChecked(true);
-        for(auto button:{assistButton,keymapButton,regionButton,resetButton,pointerButton}) {
+        fishingButton = new QToolButton(this);
+        fishingButton->setObjectName(QStringLiteral("fishingAssistButton"));
+        fishingButton->setText(QStringLiteral("钓鱼助手"));
+        fishingButton->setCheckable(true);
+        fishingButton->setToolTip(QStringLiteral("点击启停，支持最小化运行。点箭头选渔具，Esc 暂停"));
+        auto *fishingMenu = new QMenu(fishingButton);
+        addFishingChoices(fishingMenu->addMenu(QStringLiteral("鱼竿")), 3, m_rod);
+        addFishingChoices(fishingMenu->addMenu(QStringLiteral("鱼饵")), 5, m_bait);
+        fishingMenu->addSeparator();
+        fishingHistoryAction = fishingMenu->addAction(QStringLiteral("渔获记录"));
+        fishingButton->setMenu(fishingMenu);
+        fishingButton->setPopupMode(QToolButton::MenuButtonPopup);
+        for(auto button:{assistButton,keymapButton,regionButton,resetButton,pointerButton,fishingButton}) {
             button->setFocusPolicy(Qt::NoFocus);button->setFont(f);
             button->setStyleSheet("QToolButton{color:#a9bbc9;background:#1b2938;border:1px solid #34485b;border-radius:4px;padding:2px 6px;} QToolButton:checked{color:#7de0b2;border-color:#7de0b2;background:#204539;}");
         }
@@ -49,6 +64,18 @@ public:
         clock.start();
     }
     void setAssistStatus(const QString &value) {if(status!=value){status=value;update();}}
+    int fishingRod() const { return m_rod; }
+    int fishingBait() const { return m_bait; }
+    void setFishingStatus(const QString &text, int caught)
+    {
+        const QString value = QStringLiteral("%1 · %2 条").arg(text).arg(caught);
+        if (m_fishingStatus == value) {
+            return;
+        }
+        m_fishingStatus = value;
+        fishingButton->setToolTip(value + QStringLiteral("\n点击启停，支持最小化运行。点箭头选渔具，Esc 暂停"));
+        update();
+    }
     void setSnapshot(const QVariantMap &data) {
         const QVariantList history = data.value("historyEntries").toList();
         if (history != m_data.value("historyEntries").toList()) {
@@ -97,9 +124,12 @@ public:
     int heightForWidth(int width) const override { return width < 900 ? 260 : 136; }
 protected:
     void resizeEvent(QResizeEvent *) override {
-        const int buttonWidth=qMin(82,qMax(1,(width()-56)/5));int x=12;
-        for(auto button:{assistButton,keymapButton,regionButton,resetButton,pointerButton}) {
-            button->setGeometry(x,101,buttonWidth,27);x+=buttonWidth+8;
+        const int available = width() < 900 ? width() - 12 : inputRightEdge();
+        const int buttonWidth = qBound(1, (available - 12 - 30) / 6, 82);
+        int x = 12;
+        for (auto button : {assistButton, keymapButton, regionButton, resetButton, pointerButton, fishingButton}) {
+            button->setGeometry(x, 101, buttonWidth, 27);
+            x += buttonWidth + 6;
         }
         updateHistoryScroll(m_historyScroll->value() == m_historyScroll->maximum(), m_historyScroll->value());
     }
@@ -127,7 +157,9 @@ protected:
         }
         label(InputX, 8, m_data.value("mode").toString(), muted, qMin(100, right - InputX));
         const int statusX = InputX + 111;
-        label(statusX, 8, status, assistButton->isChecked() ? green : muted, right - statusX);
+        const bool showFishing = !m_fishingStatus.isEmpty() && !assistButton->isChecked() && !regionButton->isChecked();
+        label(statusX, 8, showFishing ? m_fishingStatus : status,
+              assistButton->isChecked() || fishingButton->isChecked() ? green : muted, right - statusX);
         label(InputX, 34, QStringLiteral("触点 %1").arg(m_data.value("touches", QStringLiteral("无")).toString()),
               muted, right - InputX);
         paintHistory(p, text, cyan);
@@ -140,6 +172,22 @@ protected:
         paintGraphs(p, gx, gy + 53, graphW, {green, amber, cyan, red});
     }
 private:
+    void addFishingChoices(QMenu *menu, int count, int &selection)
+    {
+        auto *choices = new QActionGroup(menu);
+        for (int index = 0; index <= count; ++index) {
+            auto *action = menu->addAction(index == 0 ? QStringLiteral("沿用游戏选择")
+                                                     : QStringLiteral("第 %1 格").arg(index));
+            action->setCheckable(true);
+            action->setChecked(index == selection);
+            action->setData(index);
+            choices->addAction(action);
+        }
+        connect(choices, &QActionGroup::triggered, this, [&selection](QAction *action) {
+            selection = action->data().toInt();
+        });
+    }
+
     void paintGraphs(QPainter &painter, int x, int y, int graphWidth, const std::array<QColor, 4> &colors) {
         if (graphWidth <= 0 || count == 0) {
             return;
@@ -304,6 +352,8 @@ private:
     };
 
     QVariantMap m_data;
+    QString m_fishingStatus;
+    int m_rod = 0, m_bait = 0;
     QString status = QStringLiteral("已关闭");
     std::array<Sample, SampleCapacity> samples{};
     QPixmap m_graphPixmap;

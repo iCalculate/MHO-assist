@@ -157,11 +157,19 @@ source_group(fontawesome FILES ${QC_FONTAWESOME_SOURCES})
 
 # uibase
 set(QC_UIBASE_SOURCES
+    uibase/fishingassistant.h
+    uibase/fishingassistant.cpp
+    uibase/fishingreport.h
+    uibase/fishingreport.cpp
     uibase/keepratiowidget.h
     uibase/keepratiowidget.cpp
     uibase/magneticwidget.h
     uibase/magneticwidget.cpp
 )
+if(WIN32 AND MSVC)
+    set_source_files_properties(uibase/fishingreport.cpp PROPERTIES COMPILE_OPTIONS "/std:c++17")
+    list(APPEND LINK_LIBS windowsapp)
+endif()
 source_group(uibase FILES ${QC_UIBASE_SOURCES})
 
 # audio
@@ -290,6 +298,18 @@ endif()
 
 
 add_executable(${PROJECT_NAME} ${QC_RUNTIME_TYPE} ${QC_PROJECT_SOURCES})
+
+set(MHO_FISHING_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../../integrations/fishing")
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/FishingWorker"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${MHO_FISHING_SOURCE}/worker.py"
+        "${MHO_FISHING_SOURCE}/vision.py"
+        "${MHO_FISHING_SOURCE}/strategy.py"
+        "${MHO_FISHING_SOURCE}/templates.npz"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/FishingWorker"
+    VERBATIM
+)
 
 # Log compile definitions
 if(ENABLE_DETAILED_LOGS)

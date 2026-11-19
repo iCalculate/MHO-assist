@@ -94,6 +94,10 @@ def stage_files(app, runtime, qt, pointer, version):
     shutil.copytree(SOURCE / 'config', app / 'config', ignore=shutil.ignore_patterns('userdata.ini'))
     shutil.copytree(SOURCE / 'keymap', app / 'keymap', ignore=shutil.ignore_patterns('*.bak'))
     shutil.copytree(WORKER / 'DirectionWorker', app / 'DirectionWorker')
+    fishing = app / 'FishingWorker'
+    fishing.mkdir()
+    for filename in ('worker.py', 'vision.py', 'strategy.py', 'templates.npz'):
+        shutil.copy2(PROJECT / 'integrations/fishing' / filename, fishing / filename)
     editor = PROJECT / 'integrations/qtscrcpy/keymap-editor'
     shutil.copytree(editor, app / 'keymap-editor')
     shutil.copy2(PROJECT / 'README.md', app / 'README.md')

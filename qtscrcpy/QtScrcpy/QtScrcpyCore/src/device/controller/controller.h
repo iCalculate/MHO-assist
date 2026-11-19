@@ -26,12 +26,14 @@ public:
     void setCameraMode(bool cameraMode);
     void recvDeviceMsg(DeviceMsg *deviceMsg);
     void test(QRect rc);
+    void postAssistTouch(int finger, AndroidMotioneventAction action, const QPoint &position, const QSize &frameSize);
 
     QVariantMap inputDiagnostics() const;
     bool cancelDeviceTouches();
     bool deviceCancelPending() const { return !m_cancelProcess.isNull(); }
     void updateScript(QString gameScript = "");
     bool isCurrentCustomKeymap();
+    void releaseCustomKeymap();
 
     void postGoBack();
     void postGoHome();

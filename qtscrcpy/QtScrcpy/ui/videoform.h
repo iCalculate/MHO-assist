@@ -17,6 +17,7 @@ class FileHandler;
 class QYUVOpenGLWidget;
 class DiagnosticPanel;
 class DirectionAssistant;
+class FishingAssistant;
 class PhonePointer;
 class MetalVideoWidget;
 class VideoForm : public QWidget, public qsc::DeviceObserver
@@ -94,6 +95,9 @@ private:
     QPointer<DiagnosticPanel> m_diagnostics;
     QTimer m_diagnosticTimer;
     DirectionAssistant *m_direction = nullptr;
+    FishingAssistant *m_fishing = nullptr;
+    QString m_fishingSession;
+    bool m_fishingEscape = false;
     PhonePointer *m_phonePointer = nullptr;
 
     //inside member

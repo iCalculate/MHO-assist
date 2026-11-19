@@ -1,4 +1,4 @@
-﻿#ifndef DEVICE_H
+#ifndef DEVICE_H
 #define DEVICE_H
 
 #include <set>
@@ -42,7 +42,10 @@ public:
     // key map
     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) override;
+    bool canAssistTouch() const override;
+    bool postAssistTouch(int finger, AssistTouchPhase phase, const QPointF &position, const QSize &frameSize) override;
     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) override;
+    void releaseCustomKeymap() override;
 
     void postGoBack() override;
     void postGoHome() override;

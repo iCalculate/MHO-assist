@@ -134,6 +134,18 @@ void Controller::test(QRect rc)
     postControlMsg(controlMsg);
 }
 
+void Controller::postAssistTouch(int finger, AndroidMotioneventAction action, const QPoint &position, const QSize &frameSize)
+{
+    // Keep assistant fingers outside the key mapper's pointer range.
+    constexpr quint64 firstAssistantPointer = 100;
+    auto *message = new ControlMsg(ControlMsg::CMT_INJECT_TOUCH);
+    const auto noButtons = static_cast<AndroidMotioneventButtons>(0);
+    message->setInjectTouchMsgData(firstAssistantPointer + static_cast<quint64>(finger),
+                                   action, noButtons, noButtons, QRect(position, frameSize),
+                                   action == AMOTION_EVENT_ACTION_UP ? 0.0f : 1.0f);
+    postControlMsg(message);
+}
+
 void Controller::updateScript(QString gameScript)
 {
     if (m_inputConvert) {
@@ -157,6 +169,11 @@ bool Controller::isCurrentCustomKeymap()
     }
 
     return m_inputConvert->isCurrentCustomKeymap();
+}
+
+void Controller::releaseCustomKeymap()
+{
+    if (auto *game = qobject_cast<InputConvertGame *>(m_inputConvert.data())) game->releaseCustomKeymap();
 }
 
 void Controller::postBackOrScreenOn(bool down)

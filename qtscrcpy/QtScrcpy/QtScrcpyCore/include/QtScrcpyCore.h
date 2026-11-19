@@ -7,6 +7,8 @@
 
 namespace qsc {
 
+enum class AssistTouchPhase { Press, Move, Release };
+
 class DeviceObserver {
 protected:
     DeviceObserver() {
@@ -110,6 +112,8 @@ public:
     virtual void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
+    virtual bool canAssistTouch() const { return false; }
+    virtual bool postAssistTouch(int, AssistTouchPhase, const QPointF &, const QSize &) { return false; }
 
     virtual void postGoBack() = 0;
     virtual void postGoHome() = 0;
@@ -148,6 +152,7 @@ public:
 
     virtual void updateScript(QString script) = 0;
     virtual bool isCurrentCustomKeymap() = 0;
+    virtual void releaseCustomKeymap() = 0;
     virtual QVariantMap inputDiagnostics() const { return {}; }
 };
 

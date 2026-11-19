@@ -1,11 +1,14 @@
 #include "../uibase/phonepointer.h"
 #include "../uibase/directionassistant.h"
+#include "../uibase/fishingassistant.h"
+#include "../uibase/fishingreport.h"
 #include "../uibase/diagnosticpanel.h"
 // #include <QDesktopWidget>
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QDir>
 #include <QDesktopServices>
+#include <QKeyEvent>
 #include <QUrl>
 #include <QLabel>
 #include <QMessageBox>
@@ -14,9 +17,11 @@
 #include <QPainter>
 #include <QScreen>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOption>
 #include <QTimer>
+#include <QUuid>
 #include <QWindow>
 #include <QtWidgets/QHBoxLayout>
 
@@ -36,6 +41,17 @@
 #ifdef Q_OS_MACOS
 #include "metalvideowindow.h"
 #endif
+
+namespace {
+bool isDesktopSwitchKey(const QKeyEvent &event)
+{
+    const int key = event.key();
+    return key == Qt::Key_Alt || key == Qt::Key_Meta || key == Qt::Key_Shift ||
+           event.modifiers().testFlag(Qt::MetaModifier) ||
+           (event.modifiers().testFlag(Qt::AltModifier) &&
+            (key == Qt::Key_Tab || key == Qt::Key_Backtab || key == Qt::Key_Escape || key == Qt::Key_Space));
+}
+}
 
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, int decodeMode, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin), m_decodeMode(decodeMode)
 {
@@ -63,6 +79,8 @@ VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, int deco
 
 VideoForm::~VideoForm()
 {
+    delete m_fishing;
+    m_fishing = nullptr;
     delete m_phonePointer;
     m_phonePointer = nullptr;
     delete m_direction;
@@ -166,10 +184,54 @@ void VideoForm::initUI()
         device->keyEvent(&up, m_frameSize, videoWidget()->size());
     };
     m_direction->showStatus = [this](QString status) { m_diagnostics->setAssistStatus(status); };
-    connect(m_diagnostics->assistButton, &QToolButton::toggled, this, [this](bool on) { m_direction->enable(on); });
-    connect(m_diagnostics->regionButton, &QToolButton::toggled, this, [this](bool on) { m_direction->edit(on); });
+    const auto releaseCustomKeymap = [this] {
+        const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        if (device) device->releaseCustomKeymap();
+    };
+    m_fishing = new FishingAssistant(this, videoWidget());
+    m_fishing->canSend = [this]() {
+        const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        return device && device->canAssistTouch() && !isMetalMode() && !device->isFlexDisplay();
+    };
+    m_fishing->sendTouch = [this](int finger, qsc::AssistTouchPhase phase, const QPointF &point, const QSize &size) {
+        const auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        return device && device->postAssistTouch(finger, phase, point, size);
+    };
+    m_fishing->showStatus = [this](bool running, const QString &text, int caught) {
+        const QSignalBlocker blocked(m_diagnostics->fishingButton);
+        m_diagnostics->fishingButton->setChecked(running);
+        m_diagnostics->setFishingStatus(text, caught);
+    };
+    m_fishing->onCatch = [this](const QString &name, const QImage &label) {
+        recordFishingCatch(m_fishingSession, name, label);
+    };
+    m_fishing->onCompleted = [this](int caught) { showFishingSummary(this, m_fishingSession, caught); };
+    connect(m_diagnostics->fishingButton, &QToolButton::toggled, this, [this, releaseCustomKeymap](bool on) {
+        if (on) {
+            m_diagnostics->assistButton->setChecked(false);
+            m_diagnostics->regionButton->setChecked(false);
+            m_fishingSession = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            m_fishing->start(m_diagnostics->fishingRod(), m_diagnostics->fishingBait());
+            if (m_fishing->isRunning()) releaseCustomKeymap();
+        } else {
+            m_fishing->stop();
+        }
+    });
+    connect(m_diagnostics->fishingHistoryAction, &QAction::triggered, this, [this] { showFishingHistory(this); });
+    connect(m_diagnostics->fishingButton->menu(), &QMenu::triggered, this, [this](QAction *action) {
+        if (action != m_diagnostics->fishingHistoryAction) m_fishing->stop();
+    });
+    connect(m_diagnostics->assistButton, &QToolButton::toggled, this, [this](bool on) {
+        if (on) m_fishing->stop();
+        m_direction->enable(on);
+    });
+    connect(m_diagnostics->regionButton, &QToolButton::toggled, this, [this](bool on) {
+        if (on) m_fishing->stop();
+        m_direction->edit(on);
+    });
     connect(m_diagnostics->resetButton, &QToolButton::clicked, this, [this] { m_direction->resetRegion(); });
     connect(m_diagnostics->keymapButton, &QToolButton::clicked, this, [this] {
+        m_fishing->stop();
         const QDir appDir(QCoreApplication::applicationDirPath());
         const QString worker = appDir.filePath(QStringLiteral("DirectionWorker/DirectionWorker.exe"));
         const QString launcher = appDir.absoluteFilePath(
@@ -731,8 +793,11 @@ void VideoForm::grabCursor(bool grab)
 
 void VideoForm::onFrame(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
 {
-    updateRender(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+    if (!isMinimized()) {
+        updateRender(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+    }
     if (m_direction) m_direction->frame(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+    if (m_fishing) m_fishing->frame(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
 }
 
 void VideoForm::onFrameMetal(void *cvPixelBuffer, int width, int height)
@@ -776,6 +841,11 @@ void VideoForm::staysOnTop(bool top)
 
 void VideoForm::mousePressEvent(QMouseEvent *event)
 {
+    QWidget *vw = videoWidget();
+    const bool overVideo = vw && vw->geometry().contains(event->pos());
+    if (m_fishing && (overVideo || event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)) {
+        m_fishing->stop(QStringLiteral("手动操作，钓鱼已暂停"));
+    }
     if(m_phonePointer && event->button()==Qt::LeftButton) m_phonePointer->buttonEvent(true);
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (event->button() == Qt::MiddleButton) {
@@ -800,8 +870,7 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
         QPointF globalPos = event->globalPosition();
 #endif
 
-    QWidget *vw = videoWidget();
-    if (vw && vw->geometry().contains(event->pos())) {
+    if (overVideo) {
         if (!device) {
             return;
         }
@@ -948,12 +1017,24 @@ void VideoForm::wheelEvent(QWheelEvent *event)
             pos, event->globalPosF(), event->pixelDelta(), event->angleDelta(), event->delta(), event->orientation(),
             event->buttons(), event->modifiers(), event->phase(), event->source(), event->inverted());
 #endif
+        if (m_fishing) m_fishing->stop(QStringLiteral("手动操作，钓鱼已暂停"));
         emit device->wheelEvent(&wheelEvent, m_frameSize, vw->size());
     }
 }
 
 void VideoForm::keyPressEvent(QKeyEvent *event)
 {
+    if (m_fishing && m_fishing->isRunning() && isDesktopSwitchKey(*event)) {
+        event->ignore();
+        return;
+    }
+    if (event->key() == Qt::Key_Escape && (m_fishingEscape || (m_fishing && m_fishing->isRunning()))) {
+        m_fishingEscape = true;
+        m_fishing->stop();
+        event->accept();
+        return;
+    }
+    if (m_fishing) m_fishing->stop(QStringLiteral("手动操作，钓鱼已暂停"));
     if (event->key() == Qt::Key_F8 || event->key() == Qt::Key_F9 || event->key() == Qt::Key_F7) {
         if (!event->isAutoRepeat()) {
             if (event->key() == Qt::Key_F8) m_diagnostics->assistButton->toggle();
@@ -979,6 +1060,15 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
 
 void VideoForm::keyReleaseEvent(QKeyEvent *event)
 {
+    if (m_fishing && m_fishing->isRunning() && isDesktopSwitchKey(*event)) {
+        event->ignore();
+        return;
+    }
+    if (event->key() == Qt::Key_Escape && m_fishingEscape) {
+        if (!event->isAutoRepeat()) m_fishingEscape = false;
+        event->accept();
+        return;
+    }
     if (event->key() == Qt::Key_F8 || event->key() == Qt::Key_F9 || event->key() == Qt::Key_F7) { event->accept(); return; }
 
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
@@ -1029,6 +1119,7 @@ void VideoForm::resizeEvent(QResizeEvent *event)
 
 void VideoForm::closeEvent(QCloseEvent *event)
 {
+    if (m_fishing) m_fishing->stop();
     if (m_direction) m_direction->stop();
     if (m_phonePointer) m_phonePointer->enable(false);
     Q_UNUSED(event)

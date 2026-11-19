@@ -20,3 +20,15 @@ python -m scripts.build_qtscrcpy --qt "C:\Qt\5.15.2\msvc2019_64" --runtime "C:\B
 ## 组件
 
 QtScrcpy 主程序直接负责投屏、映射与输入。`DirectionWorker/DirectionWorker.exe` 是它启动的识别进程，通过逐行 JSON 接收投屏画面并返回方向。在投屏窗口点击「按键配置」时，同一进程在本机回环地址提供独立的编辑会话。Qt 窗口通过选中的设备序列号请求实时截图，编辑后保存到当前用户的 `Generic-Alt.json`。
+
+## 钓鱼助手
+
+连接手机后，在投屏中进入钓点，点击工具栏的「钓鱼助手」。按钮旁的箭头可以选择鱼竿、鱼饵和查看「渔获记录」。启动后可切到其他窗口或最小化投屏。回到投屏后点击助手按钮或按 Esc 可以暂停。
+
+助手从中文横屏投屏帧识别落点、鱼标和收线仪表。连续看不到鱼标后会退出钓点，完成卡显示本轮数量、鱼名和捕获时间。捕获记录保存在当前 QtScrcpy 配置目录的 `fishing-history.json`，关闭应用后仍可查看。
+
+识别进程需要可从 PATH 启动的 Python 3.10 或更新版本，以及 `opencv-python` 和 `numpy`。Windows 构建使用支持 C++/WinRT 的 Windows 10 SDK。鱼名可根据结算画面匹配，其他名称使用 Windows 的简体中文 OCR。没有读出名字时，记录仍保留并显示「鱼名未识别」。
+
+```powershell
+python integrations/fishing/worker.py --replay "path/to/recording.mp4"
+```

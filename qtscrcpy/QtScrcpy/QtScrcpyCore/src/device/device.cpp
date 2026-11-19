@@ -797,6 +797,31 @@ void Device::installApkRequest(const QString &apkFile)
     }
 }
 
+bool Device::canAssistTouch() const
+{
+    return m_controller && !isCameraMode() && !m_controller->deviceCancelPending();
+}
+
+bool Device::postAssistTouch(int finger, AssistTouchPhase phase, const QPointF &position, const QSize &frameSize)
+{
+    if (!m_controller || isCameraMode() || frameSize.isEmpty() || finger < 0 || finger >= 3) {
+        return false;
+    }
+    if (phase != AssistTouchPhase::Release && !canAssistTouch()) {
+        return false;
+    }
+    AndroidMotioneventAction action = AMOTION_EVENT_ACTION_MOVE;
+    if (phase == AssistTouchPhase::Press) {
+        action = AMOTION_EVENT_ACTION_DOWN;
+    } else if (phase == AssistTouchPhase::Release) {
+        action = AMOTION_EVENT_ACTION_UP;
+    }
+    const QPoint pixel(qBound(0, qRound(position.x() * frameSize.width()), frameSize.width() - 1),
+                       qBound(0, qRound(position.y() * frameSize.height()), frameSize.height() - 1));
+    m_controller->postAssistTouch(finger, action, pixel, frameSize);
+    return true;
+}
+
 void Device::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)
 {
     if (isCameraMode()) {
@@ -851,6 +876,11 @@ bool Device::isCurrentCustomKeymap()
         return false;
     }
     return m_controller->isCurrentCustomKeymap();
+}
+
+void Device::releaseCustomKeymap()
+{
+    if (m_controller) m_controller->releaseCustomKeymap();
 }
 
 bool Device::saveFrame(int width, int height, uint8_t* dataRGB32)
